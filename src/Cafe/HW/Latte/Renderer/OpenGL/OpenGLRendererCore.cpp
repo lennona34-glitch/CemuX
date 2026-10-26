@@ -17,7 +17,6 @@
 #include "Cafe/OS/libs/gx2/GX2.h"
 
 #include "Cafe/GameProfile/GameProfile.h"
-#include "HW/Latte/Renderer/RendererCore.h"
 #include "config/ActiveSettings.h"
 
 
@@ -53,7 +52,7 @@ struct
 	uint32 maxIndex;
 	uint32 minIndex;
 	uint8* indexData;
-	// buffer
+	// buffer 
 	GLuint glIndexCacheBuffer;
 	VirtualBufferHeap_t* indexBufferVirtualHeap;
 	uint8* mappedIndexBuffer;
@@ -68,7 +67,7 @@ struct
 {
 	uint8* vboOutput;
 	uint32 vboStride;
-	Latte::E_HWFMT dataFormat;
+	uint8 dataFormat;
 	uint8 nfa;
 	bool isSigned;
 }activeAttributePointer[LATTE_VS_ATTRIBUTE_LIMIT] = { 0 };
@@ -82,9 +81,9 @@ void LatteDraw_resetAttributePointerCache()
 	}
 }
 
-void _setAttributeBufferPointerRaw(uint32 attributeShaderLoc, uint8* buffer, uint32 bufferSize, uint32 stride, LatteParsedFetchShaderAttribute* attrib, uint8* vboOutput, uint32 vboStride)
+void _setAttributeBufferPointerRaw(uint32 attributeShaderLoc, uint8* buffer, uint32 bufferSize, uint32 stride, LatteParsedFetchShaderAttribute_t* attrib, uint8* vboOutput, uint32 vboStride)
 {
-	Latte::E_HWFMT dataFormat = attrib->format;
+	uint32 dataFormat = attrib->format;
 	bool isSigned = attrib->isSigned != 0;
 	uint8 nfa = attrib->nfa;
 	// don't call glVertexAttribIPointer if parameters have not changed
@@ -98,27 +97,27 @@ void _setAttributeBufferPointerRaw(uint32 attributeShaderLoc, uint8* buffer, uin
 	activeAttributePointer[attributeShaderLoc].nfa = nfa;
 	activeAttributePointer[attributeShaderLoc].isSigned = isSigned;
 	// setup attribute pointer
-	if (dataFormat == Latte::E_HWFMT::HWFMT_32_32_32_32_FLOAT || dataFormat == Latte::E_HWFMT::HWFMT_32_32_32_32)
+	if (dataFormat == FMT_32_32_32_32_FLOAT || dataFormat == FMT_32_32_32_32)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 4, GL_UNSIGNED_INT, vboStride, vboOutput);
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_32_32_32_FLOAT || dataFormat == Latte::E_HWFMT::HWFMT_32_32_32)
+	else if (dataFormat == FMT_32_32_32_FLOAT || dataFormat == FMT_32_32_32)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 3, GL_UNSIGNED_INT, vboStride, vboOutput);
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_32_32_FLOAT || dataFormat == Latte::E_HWFMT::HWFMT_32_32)
+	else if (dataFormat == FMT_32_32_FLOAT || dataFormat == FMT_32_32)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 2, GL_UNSIGNED_INT, vboStride, vboOutput);
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_32_FLOAT || dataFormat == Latte::E_HWFMT::HWFMT_32)
+	else if (dataFormat == FMT_32_FLOAT || dataFormat == FMT_32)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 1, GL_UNSIGNED_INT, vboStride, vboOutput);
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_8_8_8_8)
+	else if (dataFormat == FMT_8_8_8_8)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 4, GL_UNSIGNED_BYTE, vboStride, vboOutput);
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_8_8)
+	else if (dataFormat == FMT_8_8)
 	{
 		// workaround for AMD (alignment must be 4 for 2xbyte)
 		if (((uint32)(size_t)vboOutput & 0x3) == 2 && LatteGPUState.glVendor == GLVENDOR_AMD)
@@ -130,23 +129,23 @@ void _setAttributeBufferPointerRaw(uint32 attributeShaderLoc, uint8* buffer, uin
 			glVertexAttribIPointer(attributeShaderLoc, 2, GL_UNSIGNED_BYTE, vboStride, vboOutput);
 		}
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_8)
+	else if (dataFormat == FMT_8)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 1, GL_UNSIGNED_BYTE, vboStride, vboOutput);
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_16_16_16_16_FLOAT || dataFormat == Latte::E_HWFMT::HWFMT_16_16_16_16)
+	else if (dataFormat == FMT_16_16_16_16_FLOAT || dataFormat == FMT_16_16_16_16)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 4, GL_UNSIGNED_SHORT, vboStride, vboOutput);
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_16_16_FLOAT || dataFormat == Latte::E_HWFMT::HWFMT_16_16)
+	else if (dataFormat == FMT_16_16_FLOAT || dataFormat == FMT_16_16)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 2, GL_UNSIGNED_SHORT, vboStride, vboOutput);
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_16_FLOAT || dataFormat == Latte::E_HWFMT::HWFMT_16)
+	else if (dataFormat == FMT_16_FLOAT || dataFormat == FMT_16)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 1, GL_UNSIGNED_SHORT, vboStride, vboOutput);
 	}
-	else if (dataFormat == Latte::E_HWFMT::HWFMT_2_10_10_10)
+	else if (dataFormat == FMT_2_10_10_10)
 	{
 		glVertexAttribIPointer(attributeShaderLoc, 1, GL_UNSIGNED_INT, vboStride, vboOutput);
 	}
@@ -372,8 +371,6 @@ void _decodeAndUploadIndexData(indexDataCacheEntry2_t* cacheEntry)
 
 void LatteDraw_cleanupAfterFrame()
 {
-	if (g_renderer->GetType() != RendererAPI::OpenGL)
-		return;
 	// drop everything from cache that is older than 30 frames
 	uint32 frameCounter = LatteGPUState.frameCounter;
 	while (indexDataCacheFirst)
@@ -527,6 +524,70 @@ void LatteDrawGL_prepareIndicesWithGPUCache(MPTR indexDataMPTR, _INDEX_TYPE inde
 	indexState.indexData = (uint8*)(size_t)cacheEntry->heapEntry->startOffset;
 }
 
+void LatteDraw_handleSpecialState8_clearAsDepth()
+{
+	if (LatteGPUState.contextNew.GetSpecialStateValues()[0] == 0)
+		cemuLog_logDebug(LogType::Force, "Special state 8 requires special state 0 but it is not set?");
+	// get depth buffer information
+	uint32 regDepthBuffer = LatteGPUState.contextRegister[mmDB_HTILE_DATA_BASE];
+	uint32 regDepthSize = LatteGPUState.contextRegister[mmDB_DEPTH_SIZE];
+	uint32 regDepthBufferInfo = LatteGPUState.contextRegister[mmDB_DEPTH_INFO];
+	// get format and tileMode from info reg
+	uint32 depthBufferTileMode = (regDepthBufferInfo >> 15) & 0xF;
+
+	MPTR depthBufferPhysMem = regDepthBuffer << 8;
+	uint32 depthBufferPitch = (((regDepthSize >> 0) & 0x3FF) + 1);
+	uint32 depthBufferHeight = ((((regDepthSize >> 10) & 0xFFFFF) + 1) / depthBufferPitch);
+	depthBufferPitch <<= 3;
+	depthBufferHeight <<= 3;
+	uint32 depthBufferWidth = depthBufferPitch;
+
+	sint32 sliceIndex = 0; // todo
+	sint32 mipIndex = 0;
+
+	// clear all color buffers that match the format of the depth buffer
+	sint32 searchIndex = 0;
+	bool targetFound = false;
+	while (true)
+	{
+		LatteTextureView* view = LatteTC_LookupTextureByData(depthBufferPhysMem, depthBufferWidth, depthBufferHeight, depthBufferPitch, 0, 1, sliceIndex, 1, &searchIndex);
+		if (!view)
+		{
+			// should we clear in RAM instead?
+			break;
+		}
+		sint32 effectiveClearWidth = view->baseTexture->width;
+		sint32 effectiveClearHeight = view->baseTexture->height;
+		LatteTexture_scaleToEffectiveSize(view->baseTexture, &effectiveClearWidth, &effectiveClearHeight, 0);
+
+		// hacky way to get clear color
+		float* regClearColor = (float*)(LatteGPUState.contextRegister + 0xC000 + 0); // REG_BASE_ALU_CONST
+
+		uint8 clearColor[4] = { 0 };
+		clearColor[0] = (uint8)(regClearColor[0] * 255.0f);
+		clearColor[1] = (uint8)(regClearColor[1] * 255.0f);
+		clearColor[2] = (uint8)(regClearColor[2] * 255.0f);
+		clearColor[3] = (uint8)(regClearColor[3] * 255.0f);
+
+		// todo - use fragment shader software emulation (evoke for one pixel) to determine clear color
+		// todo - dont clear entire slice, use effectiveClearWidth, effectiveClearHeight
+
+		if (g_renderer->GetType() == RendererAPI::OpenGL)
+		{
+			//cemu_assert_debug(false); // implement g_renderer->texture_clearColorSlice properly for OpenGL renderer
+			if (glClearTexSubImage)
+				glClearTexSubImage(((LatteTextureViewGL*)view)->glTexId, mipIndex, 0, 0, 0, effectiveClearWidth, effectiveClearHeight, 1, GL_RGBA, GL_UNSIGNED_BYTE, clearColor);
+		}
+		else
+		{
+			if (view->baseTexture->isDepth)
+				g_renderer->texture_clearDepthSlice(view->baseTexture, sliceIndex + view->firstSlice, mipIndex + view->firstMip, true, view->baseTexture->hasStencil, 0.0f, 0);
+			else
+				g_renderer->texture_clearColorSlice(view->baseTexture, sliceIndex + view->firstSlice, mipIndex + view->firstMip, clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
+		}
+	}
+}
+
 void LatteDrawGL_doDraw(_INDEX_TYPE indexType, uint32 baseVertex, uint32 baseInstance, uint32 instanceCount, uint32 count)
 {
 	if (indexType == _INDEX_TYPE::U16_BE)
@@ -574,14 +635,11 @@ void LatteDrawGL_doDraw(_INDEX_TYPE indexType, uint32 baseVertex, uint32 baseIns
 	}
 }
 
-uint32 _glVertexBufferOffset[Latte::GPU_LIMITS::NUM_VERTEX_BUFFERS] = { 0 };
+uint32 _glVertexBufferOffset[32] = { 0 };
 
-void OpenGLRenderer::buffer_bindVertexBuffers(std::span<BindBufferParam> bindings)
+void OpenGLRenderer::buffer_bindVertexBuffer(uint32 bufferIndex, uint32 offset, uint32 size)
 {
-	for (const auto& binding : bindings)
-	{
-		_glVertexBufferOffset[binding.index] = binding.bindOffset;
-	}
+	_glVertexBufferOffset[bufferIndex] = offset;
 }
 
 void OpenGLRenderer::buffer_bindUniformBuffer(LatteConst::ShaderType shaderType, uint32 bufferIndex, uint32 offset, uint32 size)
@@ -610,11 +668,11 @@ void OpenGLRenderer::buffer_bindUniformBuffer(LatteConst::ShaderType shaderType,
 
 void LatteDraw_resetAttributePointerCache();
 
-void _resetAttributes(LatteParsedFetchShaderBufferGroup* attribGroup, bool* attributeArrayUsed)
+void _resetAttributes(LatteParsedFetchShaderBufferGroup_t* attribGroup, bool* attributeArrayUsed)
 {
 	for (sint32 i = 0; i < attribGroup->attribCount; i++)
 	{
-		LatteParsedFetchShaderAttribute* attrib = attribGroup->attrib + i;
+		LatteParsedFetchShaderAttribute_t* attrib = attribGroup->attrib + i;
 		sint32 attributeShaderLocation = attrib->semanticId; // we now bind to the semanticId instead
 		attributeArrayUsed[attributeShaderLocation] = false;
 	}
@@ -636,6 +694,9 @@ void OpenGLRenderer::_setupVertexAttributes()
 	sint32 attributeDataIndex = 0;
 	uint32 vboDataOffset = 0;
 
+	bool tfBufferIsBound = false;
+	sint32 maxReallocAttemptLimit = 1;
+
 	for(auto& bufferGroup : parsedFetchShader->bufferGroups)
 	{
 		uint32 bufferIndex = bufferGroup.attributeBufferIndex;
@@ -654,7 +715,7 @@ void OpenGLRenderer::_setupVertexAttributes()
 
 		for (sint32 i = 0; i < bufferGroup.attribCount; i++)
 		{
-			LatteParsedFetchShaderAttribute* attrib = bufferGroup.attrib + i;
+			LatteParsedFetchShaderAttribute_t* attrib = bufferGroup.attrib + i;
 			sint32 attributeShaderLocation = attrib->semanticId; // we now bind to the semanticId instead
 
 			attributeShaderLocation = vertexShader->resourceMapping.getAttribHostShaderIndex(attrib->semanticId);
@@ -693,6 +754,10 @@ void OpenGLRenderer::_setupVertexAttributes()
 			SetAttributeArrayState(i, false, -1);
 	}
 }
+
+void rectsEmulationGS_outputSingleVertex(std::string& gsSrc, LatteDecompilerShader* vertexShader, LatteShaderPSInputTable* psInputTable, sint32 vIdx);
+void rectsEmulationGS_outputGeneratedVertex(std::string& gsSrc, LatteDecompilerShader* vertexShader, LatteShaderPSInputTable* psInputTable, const char* variant);
+void rectsEmulationGS_outputVerticesCode(std::string& gsSrc, LatteDecompilerShader* vertexShader, LatteShaderPSInputTable* psInputTable, sint32 p0, sint32 p1, sint32 p2, sint32 p3, const char* variant, const LatteContextRegister& latteRegister);
 
 std::map<uint64, RendererShaderGL*> g_mapGLRectEmulationGS;
 
@@ -866,7 +931,7 @@ void OpenGLRenderer::draw_genericDrawHandler(uint32 baseVertex, uint32 baseInsta
 	}
 	if (LatteGPUState.activeShaderHasError)
 	{
-		cemuLog_logDebugOnce(LogType::Force, "Skipped drawcall due to shader error\n");
+		debug_printf("Skipped drawcall due to shader error\n");
 		return;
 	}
 	// check for blacklisted shaders
@@ -975,8 +1040,7 @@ void OpenGLRenderer::draw_genericDrawHandler(uint32 baseVertex, uint32 baseInsta
 	endPerfMonProfiling(performanceMonitor.gpuTime_dcStageIndexMgr);
 
 	// synchronize vertex and uniform buffers
-	uint8 stageUniformModifiedMask = 0;
-	LatteBufferCache_Sync(indexState.maxIndex + baseVertex, baseInstance, instanceCount, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, stageUniformModifiedMask);
+	LatteBufferCache_Sync(indexState.minIndex + baseVertex, indexState.maxIndex + baseVertex, baseInstance, instanceCount);
 
 	_setupVertexAttributes();
 
@@ -1149,9 +1213,9 @@ void OpenGLRenderer::draw_beginSequence()
 	// no-op
 }
 
-void OpenGLRenderer::draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 instanceCount, uint32 count, MPTR indexDataMPTR, Latte::LATTE_VGT_DMA_INDEX_TYPE::E_INDEX_TYPE indexType, const LatteDrawcallContext& drawcallContext)
+void OpenGLRenderer::draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 instanceCount, uint32 count, MPTR indexDataMPTR, Latte::LATTE_VGT_DMA_INDEX_TYPE::E_INDEX_TYPE indexType, bool isFirst)
 {
-	bool isMinimal = !drawcallContext.isFirst;
+	bool isMinimal = !isFirst;
     if (isMinimal)
         draw_genericDrawHandler<true, false>(baseVertex, baseInstance, instanceCount, count, indexDataMPTR, indexType);
     else
@@ -1356,7 +1420,7 @@ void OpenGLRenderer::renderstate_updateTextureSettingsGL(LatteDecompilerShader* 
 		const _LatteRegisterSetSampler* samplerWords = LatteGPUState.contextNew.SQ_TEX_SAMPLER + samplerIndex;
 
 		auto filterMag = samplerWords->WORD0.get_XY_MAG_FILTER();
-		auto filterMin = samplerWords->WORD0.get_XY_MIN_FILTER();
+		auto filterMin = samplerWords->WORD0.get_XY_MAG_FILTER();
 		//auto filterZ = samplerWords->WORD0.get_Z_FILTER();
 		auto filterMip = samplerWords->WORD0.get_MIP_FILTER();
 

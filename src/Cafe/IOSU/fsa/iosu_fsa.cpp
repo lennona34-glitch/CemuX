@@ -1,4 +1,3 @@
-#include "Common/CafeStaticVar.h"
 #include "fsa_types.h"
 #include "iosu_fsa.h"
 #include "Cafe/IOSU/kernel/iosu_kernel.h"
@@ -8,6 +7,8 @@
 #include "Cafe/OS/libs/coreinit/coreinit_FS.h"	 // get rid of this dependency, requires reworking some of the IPC stuff. See locations where we use coreinit::FSCmdBlockBody_t
 #include "Cafe/HW/Latte/Core/LatteBufferCache.h" // also remove this dependency
 
+#include "Cafe/HW/MMU/MMU.h"
+
 using namespace iosu::kernel;
 
 namespace iosu
@@ -15,8 +16,7 @@ namespace iosu
 	namespace fsa
 	{
 		IOSMsgQueueId sFSAIoMsgQueue;
-		constinit IOSUStaticData s_fsaStaticData;
-		CafeStaticVar<iosu::kernel::IOSMessage, 352> _m_sFSAIoMsgQueueMsgBuffer{s_fsaStaticData};
+		SysAllocator<iosu::kernel::IOSMessage, 352> _m_sFSAIoMsgQueueMsgBuffer;
 		std::thread sFSAIoThread;
 
 		struct FSAClient // IOSU's counterpart to the coreinit FSClient struct
@@ -888,7 +888,6 @@ namespace iosu
 
 		void Initialize()
 		{
-			s_fsaStaticData.Allocate();
 			for (auto& it : sFSAClientArray)
 				it.ReleaseAndCleanup();
 			sFSAIoMsgQueue = (IOSMsgQueueId)IOS_CreateMessageQueue(_m_sFSAIoMsgQueueMsgBuffer.GetPtr(), _m_sFSAIoMsgQueueMsgBuffer.GetCount());
@@ -902,8 +901,6 @@ namespace iosu
 		{
 			IOS_SendMessage(sFSAIoMsgQueue, 0, 0);
 			sFSAIoThread.join();
-			IOS_DestroyMessageQueue(sFSAIoMsgQueue);
-			s_fsaStaticData.Deallocate();
 		}
 	} // namespace fsa
 } // namespace iosu

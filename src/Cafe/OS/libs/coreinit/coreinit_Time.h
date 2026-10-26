@@ -50,7 +50,6 @@ namespace coreinit
 	};
 
 	void OSTicksToCalendarTime(uint64 ticks, OSCalendarTime_t* calenderStruct);
-	void FSTimeToCalendarTime(uint64 fsTime_microseconds, OSCalendarTime_t* outCalendarTime);
 
 	uint64 OSGetSystemTime();
 	uint64 OSGetTime();

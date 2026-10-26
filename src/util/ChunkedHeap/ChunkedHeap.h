@@ -283,7 +283,7 @@ private:
 				{
 					if (itr.chunkIndex != dbgRange.chunkIndex)
 						continue;
-					if (itr.offset < (dbgRange.offset + dbgRange.size) && (itr.offset + itr.size) > dbgRange.offset)
+					if (itr.offset < (dbgRange.offset + dbgRange.size) && (itr.offset + itr.size) >(dbgRange.offset))
 						cemu_assert_error();
 				}
 
@@ -372,7 +372,6 @@ public:
 
 	void free(void* addr) override
 	{
-		cemu_assert_debug(addr >= m_heapBase && addr < (m_heapBase + m_heapSize));
 		_free((uint32)((uint8*)addr - (uint8*)m_heapBase));
 	}
 

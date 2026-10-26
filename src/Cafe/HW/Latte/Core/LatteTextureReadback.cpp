@@ -1,7 +1,12 @@
 #include "Cafe/HW/Latte/Core/Latte.h"
+#include "Cafe/HW/Latte/Core/LatteDraw.h"
 #include "Cafe/HW/Latte/Core/LattePerformanceMonitor.h"
+
+#include "Common/GLInclude/GLInclude.h"
+
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
 #include "Cafe/HW/Latte/Core/LatteTexture.h"
+#include "Cafe/HW/Latte/Renderer/OpenGL/LatteTextureViewGL.h"
 
 #define LOG_READBACK_TIME
 
@@ -21,8 +26,6 @@ void LatteTextureReadback_StartTransfer(LatteTextureView* textureView)
 	HRTick currentTick = HighResolutionTimer().now().getTick();
 	// create info entry and store in ordered linked list
 	LatteTextureReadbackInfo* readbackInfo = g_renderer->texture_createReadback(textureView);
-	if (!readbackInfo)
-		return;
 	sTextureActiveReadbackQueue.push(readbackInfo);
 	readbackInfo->StartTransfer();
 	readbackInfo->transferStartTime = currentTick;
@@ -145,7 +148,7 @@ void LatteTextureReadback_UpdateFinishedTransfers(bool forceFinish)
 		}
 #endif
 		uint8* pixelData = readbackInfo->GetData();
-		LatteTextureLoader_writeReadbackTextureToMemory(&readbackInfo->hostTextureCopy, readbackInfo->m_firstSlice, readbackInfo->m_firstMip, pixelData, readbackInfo->m_rowPitch);
+		LatteTextureLoader_writeReadbackTextureToMemory(&readbackInfo->hostTextureCopy, 0, 0, pixelData);
 		readbackInfo->ReleaseData();
 		// get the original texture if it still exists and invalidate the current data hash
 		LatteTextureView* origTexView = LatteTextureViewLookupCache::lookupSlice(readbackInfo->hostTextureCopy.physAddress, readbackInfo->hostTextureCopy.width, readbackInfo->hostTextureCopy.height, readbackInfo->hostTextureCopy.pitch, 0, 0, readbackInfo->hostTextureCopy.format);
@@ -158,43 +161,4 @@ void LatteTextureReadback_UpdateFinishedTransfers(bool forceFinish)
 		sTextureActiveReadbackQueue.pop();
 	}
 	performanceMonitor.gpuTime_waitForAsync.endMeasuring();
-}
-
-bool LatteTextureReadback_ReadbackToLinearBlocking(LatteTextureView* sourceView, uint8* dstPtr, uint32 dstWidth, uint32 dstHeight, uint32 dstPitch)
-{
-	LatteTextureReadbackInfo* info = g_renderer->texture_createReadback(sourceView);
-	if (!info)
-		return false;
-
-	info->StartTransfer();
-	info->ForceFinish();
-	cemu_assert(info->IsFinished());
-
-	uint8* data = info->GetData(); // returned pixel format should match Latte format
-	uint32 bpp = Latte::GetFormatBits(sourceView->baseTexture->format) / 8;
-	uint32 srcRowBytes = info->m_rowPitch;
-	uint32 dstRowBytes = dstWidth * bpp;
-	for (uint32 y = 0; y < dstHeight; y++)
-		memcpy(dstPtr + y * dstPitch * bpp, data + y * srcRowBytes, dstRowBytes);
-
-	info->ReleaseData();
-	delete info;
-	return true;
-}
-
-uint32 LatteTextureReadbackInfo::GetReadbackRowPitch(LatteTextureView* textureView, uint32 rowAlignment)
-{
-	uint32 width = textureView->baseTexture->GetMipWidth(textureView->firstMip);
-	if (Latte::IsCompressedFormat(textureView->format))
-		width = (width + 3) / 4;
-	uint32 rowPitch = width * (Latte::GetFormatBits(textureView->format) / 8);
-	return (rowPitch + rowAlignment - 1) & ~(rowAlignment - 1);
-}
-
-uint32 LatteTextureReadbackInfo::GetReadbackImageSize(LatteTextureView* textureView, uint32 rowPitch)
-{
-	uint32 height = textureView->baseTexture->GetMipHeight(textureView->firstMip);
-	if (Latte::IsCompressedFormat(textureView->format))
-		height = (height + 3) / 4;
-	return height * rowPitch;
 }

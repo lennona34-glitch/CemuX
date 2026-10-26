@@ -20,8 +20,6 @@ using namespace coreinit;
 
 namespace proc_ui
 {
-	constinit COSStaticData s_procuiStaticData;
-
 	enum class ProcUICoreThreadCommand
 	{
 		AcquireForeground = 0x0,
@@ -60,26 +58,26 @@ namespace proc_ui
 	MEMPTR<void> s_saveCallbackEx; // with custom param and return value, set by ProcUIInitEx()
 	MEMPTR<void> s_saveCallbackExUserParam;
 	MEMPTR<coreinit::OSMessageQueue> s_systemMessageQueuePtr;
-	CafeStaticVar<coreinit::OSEvent> s_eventStateMessageReceived{s_procuiStaticData};
-	CafeStaticVar<coreinit::OSEvent> s_eventWaitingBeforeReleaseForeground{s_procuiStaticData};
-	CafeStaticVar<coreinit::OSEvent> s_eventBackgroundThreadGotMessage{s_procuiStaticData};
+	SysAllocator<coreinit::OSEvent> s_eventStateMessageReceived;
+	SysAllocator<coreinit::OSEvent> s_eventWaitingBeforeReleaseForeground;
+	SysAllocator<coreinit::OSEvent> s_eventBackgroundThreadGotMessage;
 	// procUI core threads
 	uint32 s_coreThreadStackSize;
 	bool s_coreThreadsCreated;
 	std::atomic<ProcUICoreThreadCommand> s_commandForCoreThread;
-	CafeStaticVar<OSThread_t, Espresso::CORE_COUNT> s_coreThreadArray{s_procuiStaticData};
+	SysAllocator<OSThread_t> s_coreThreadArray[Espresso::CORE_COUNT];
 	MEMPTR<void> s_coreThreadStackPerCore[Espresso::CORE_COUNT];
-	CafeStaticVar<CafeString<22>> s_coreThread0NameBuffer{s_procuiStaticData};
-	CafeStaticVar<CafeString<22>> s_coreThread1NameBuffer{s_procuiStaticData};
-	CafeStaticVar<CafeString<22>> s_coreThread2NameBuffer{s_procuiStaticData};
-	CafeStaticVar<coreinit::OSEvent> s_eventCoreThreadsNewCommandReady{s_procuiStaticData};
-	CafeStaticVar<coreinit::OSEvent> s_eventCoreThreadsCommandDone{s_procuiStaticData};
-	CafeStaticVar<coreinit::OSRendezvous> s_coreThreadRendezvousA{s_procuiStaticData};
-	CafeStaticVar<coreinit::OSRendezvous> s_coreThreadRendezvousB{s_procuiStaticData};
-	CafeStaticVar<coreinit::OSRendezvous> s_coreThreadRendezvousC{s_procuiStaticData};
+	SysAllocator<CafeString<22>> s_coreThread0NameBuffer;
+	SysAllocator<CafeString<22>> s_coreThread1NameBuffer;
+	SysAllocator<CafeString<22>> s_coreThread2NameBuffer;
+	SysAllocator<coreinit::OSEvent> s_eventCoreThreadsNewCommandReady;
+	SysAllocator<coreinit::OSEvent> s_eventCoreThreadsCommandDone;
+	SysAllocator<coreinit::OSRendezvous> s_coreThreadRendezvousA;
+	SysAllocator<coreinit::OSRendezvous> s_coreThreadRendezvousB;
+	SysAllocator<coreinit::OSRendezvous> s_coreThreadRendezvousC;
 	// background thread
 	MEMPTR<void> s_backgroundThreadStack;
-	CafeStaticVar<OSThread_t> s_backgroundThread{s_procuiStaticData};
+	SysAllocator<OSThread_t> s_backgroundThread;
 	// user defined heap
 	MEMPTR<void> s_memoryPoolHeapPtr;
 	MEMPTR<void> s_memAllocPtr;
@@ -104,8 +102,8 @@ namespace proc_ui
 	uint32be s_driverArgUkn1;
 	uint32be s_driverArgUkn2;
 	bool s_driverInBackground;
-	CafeStaticVar<OSDriverInterface> s_ProcUIDriver{s_procuiStaticData};
-	CafeStaticVar<CafeString<16>> s_ProcUIDriverName{s_procuiStaticData};
+	SysAllocator<OSDriverInterface> s_ProcUIDriver;
+	SysAllocator<CafeString<16>> s_ProcUIDriverName;
 
 
 	void* _AllocMem(uint32 size)
@@ -357,8 +355,6 @@ namespace proc_ui
 	{
 		if (!s_isInitialized.exchange(false))
 			return;
-		if (!OSIsSchedulerActive())
-			return; // CafeSystem shutdown in progress, OS functions shouldn't be called anymore. reset() will clean up state on next re-init
 		if ( !s_isInForeground )
 			CancelBackgroundAlarms();
 		for (sint32 i = 0; i < Espresso::CORE_COUNT; i++)
@@ -778,7 +774,7 @@ namespace proc_ui
 			uint32be memBoundSize;
 			OSGetMemBound(1, &memBound, &memBoundSize);
 			OSBlockMove(memBound.GetPtr(), s_mem1StorageBasePtr, memBoundSize, true);
-			GX2::GX2Invalidate(GX2::GX2InvalidationFlag::CPU, s_mem1StorageBasePtr.GetMPTR(), memBoundSize);
+			GX2::GX2Invalidate(0x40, s_mem1StorageBasePtr.GetMPTR(), memBoundSize);
 		}
 		if (s_bucketStorageBasePtr)
 		{
@@ -786,7 +782,7 @@ namespace proc_ui
 			uint32be memBoundSize;
 			OSGetForegroundBucketFreeArea(&memBound, &memBoundSize);
 			OSBlockMove(memBound.GetPtr(), s_bucketStorageBasePtr, memBoundSize, true);
-			GX2::GX2Invalidate(GX2::GX2InvalidationFlag::CPU, memBound.GetMPTR(), memBoundSize);
+			GX2::GX2Invalidate(0x40, memBound.GetMPTR(), memBoundSize);
 		}
 	}
 
@@ -810,6 +806,42 @@ namespace proc_ui
 		StoreMEM1AndFGBucket();
 		s_driverIsActive = false;
 		OSMemoryBarrier();
+	}
+
+	sint32 rpl_entry(uint32 moduleHandle, RplEntryReason reason)
+	{
+		if ( reason == RplEntryReason::Loaded )
+		{
+			s_ProcUIDriver->getDriverName = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {MEMPTR<const char> namePtr(ProcUIDriver_GetName()); osLib_returnFromFunction(hCPU, namePtr.GetMPTR()); });
+			s_ProcUIDriver->init = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {ProcUIDriver_Init(); osLib_returnFromFunction(hCPU, 0); });
+			s_ProcUIDriver->onAcquireForeground = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {ProcUIDriver_OnAcquiredForeground(); osLib_returnFromFunction(hCPU, 0); });
+			s_ProcUIDriver->onReleaseForeground = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {ProcUIDriver_OnReleaseForeground(); osLib_returnFromFunction(hCPU, 0); });
+			s_ProcUIDriver->done = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {ProcUIDriver_OnDone(); osLib_returnFromFunction(hCPU, 0); });
+
+			s_driverIsActive = false;
+			s_driverArgUkn1 = 0;
+			s_driverArgUkn2 = 0;
+			s_driverInBackground = false;
+			uint32be ukn3;
+			OSDriver_Register(moduleHandle, 200, &s_ProcUIDriver, 0, &s_driverArgUkn1, &s_driverArgUkn2, &ukn3);
+			if ( ukn3 )
+			{
+				if ( OSGetForegroundBucket(nullptr, nullptr) )
+				{
+					ProcUIDriver_Init();
+					OSMemoryBarrier();
+					return 0;
+				}
+				s_driverInBackground = true;
+			}
+			OSMemoryBarrier();
+		}
+		else if ( reason == RplEntryReason::Unloaded )
+		{
+			ProcUIDriver_OnDone();
+			OSDriver_Deregister(moduleHandle, 0);
+		}
+		return 0;
 	}
 
 	void reset()
@@ -845,90 +877,32 @@ namespace proc_ui
 
 	void load()
 	{
+		reset();
 
+		cafeExportRegister("proc_ui", ProcUIInit, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUIInitEx, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUIShutdown, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUIIsRunning, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUIInForeground, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUIInShutdown, LogType::ProcUi);
+
+		cafeExportRegister("proc_ui", ProcUIRegisterCallbackCore, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUIRegisterCallback, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUIRegisterBackgroundCallback, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUIClearCallbacks, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUISetSaveCallback, LogType::ProcUi);
+
+		cafeExportRegister("proc_ui", ProcUISetCallbackStackSize, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUICalcMemorySize, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUISetMemoryPool, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUISetBucketStorage, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUISetMEM1Storage, LogType::ProcUi);
+
+		cafeExportRegister("proc_ui", ProcUIDrawDoneRelease, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUIProcessMessages, LogType::ProcUi);
+		cafeExportRegister("proc_ui", ProcUISubProcessMessages, LogType::ProcUi);
+
+		// manually call rpl_entry for now
+		rpl_entry(-1, RplEntryReason::Loaded);
 	}
-
-	class : public COSModule
-	{
-		public:
-		std::string_view GetName() override
-		{
-			return "proc_ui";
-		}
-
-		void RPLUnmapped() override
-		{
-			s_procuiStaticData.Deallocate();
-		}
-
-		void RPLMapped() override
-		{
-			s_procuiStaticData.Allocate();
-			reset();
-
-			cafeExportRegister("proc_ui", ProcUIInit, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUIInitEx, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUIShutdown, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUIIsRunning, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUIInForeground, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUIInShutdown, LogType::ProcUi);
-
-			cafeExportRegister("proc_ui", ProcUIRegisterCallbackCore, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUIRegisterCallback, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUIRegisterBackgroundCallback, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUIClearCallbacks, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUISetSaveCallback, LogType::ProcUi);
-
-			cafeExportRegister("proc_ui", ProcUISetCallbackStackSize, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUICalcMemorySize, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUISetMemoryPool, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUISetBucketStorage, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUISetMEM1Storage, LogType::ProcUi);
-
-			cafeExportRegister("proc_ui", ProcUIDrawDoneRelease, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUIProcessMessages, LogType::ProcUi);
-			cafeExportRegister("proc_ui", ProcUISubProcessMessages, LogType::ProcUi);
-		};
-
-		void rpl_entry(uint32 moduleHandle, coreinit::RplEntryReason reason) override
-		{
-			if ( reason == RplEntryReason::Loaded )
-			{
-				s_ProcUIDriver->getDriverName = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {MEMPTR<const char> namePtr(ProcUIDriver_GetName()); osLib_returnFromFunction(hCPU, namePtr.GetMPTR()); });
-				s_ProcUIDriver->init = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {ProcUIDriver_Init(); osLib_returnFromFunction(hCPU, 0); });
-				s_ProcUIDriver->onAcquireForeground = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {ProcUIDriver_OnAcquiredForeground(); osLib_returnFromFunction(hCPU, 0); });
-				s_ProcUIDriver->onReleaseForeground = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {ProcUIDriver_OnReleaseForeground(); osLib_returnFromFunction(hCPU, 0); });
-				s_ProcUIDriver->done = RPLLoader_MakePPCCallable([](PPCInterpreter_t* hCPU) {ProcUIDriver_OnDone(); osLib_returnFromFunction(hCPU, 0); });
-
-				s_driverIsActive = false;
-				s_driverArgUkn1 = 0;
-				s_driverArgUkn2 = 0;
-				s_driverInBackground = false;
-				uint32be ukn3;
-				OSDriver_Register(moduleHandle, 200, &s_ProcUIDriver, 0, &s_driverArgUkn1, &s_driverArgUkn2, &ukn3);
-				if ( ukn3 )
-				{
-					if ( OSGetForegroundBucket(nullptr, nullptr) )
-					{
-						ProcUIDriver_Init();
-						OSMemoryBarrier();
-						return;
-					}
-					s_driverInBackground = true;
-				}
-				OSMemoryBarrier();
-			}
-			else if ( reason == RplEntryReason::Unloaded )
-			{
-				ProcUIDriver_OnDone();
-				OSDriver_Deregister(moduleHandle, 0);
-			}
-		}
-	}s_COSprocuiModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSprocuiModule;
-	}
-
 };

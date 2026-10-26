@@ -1,12 +1,11 @@
 #include "Cafe/OS/common/OSCommon.h"
-#include "Cafe/OS/libs/coreinit/coreinit_MEM.h"
 
 typedef struct  
 {
 	uint32 reserved;
 }udsWorkspace_t;
 
-udsWorkspace_t* udsWorkspace = nullptr;
+udsWorkspace_t* udsWorkspace = NULL;
 
 void nnUdsExport___sti___11_uds_Api_cpp_f5d9abb2(PPCInterpreter_t* hCPU)
 {
@@ -16,31 +15,10 @@ void nnUdsExport___sti___11_uds_Api_cpp_f5d9abb2(PPCInterpreter_t* hCPU)
 	osLib_returnFromFunction(hCPU, memory_getVirtualOffsetFromPointer(udsWorkspace));
 }
 
-namespace nn::uds
+/*
+ * Load UDS functions
+ */
+void nnUds_load()
 {
-	class : public COSModule
-	{
-		public:
-		std::string_view GetName() override
-		{
-			return "nn_uds";
-		}
-
-		void RPLMapped() override
-		{
-			udsWorkspace = nullptr;
-			osLib_addFunction("nn_uds", "__sti___11_uds_Api_cpp_f5d9abb2", nnUdsExport___sti___11_uds_Api_cpp_f5d9abb2);
-		};
-
-		void RPLUnmapped() override
-		{
-			if (udsWorkspace)
-				coreinit_freeToSysArea(memory_getVirtualOffsetFromPointer(udsWorkspace));
-		}
-	}s_COSnnUdsModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSnnUdsModule;
-	}
+	osLib_addFunction("nn_uds", "__sti___11_uds_Api_cpp_f5d9abb2", nnUdsExport___sti___11_uds_Api_cpp_f5d9abb2);
 }

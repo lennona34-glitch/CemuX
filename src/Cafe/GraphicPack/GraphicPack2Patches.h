@@ -59,8 +59,6 @@ public:
 	PatchEntry() {};
 	virtual ~PatchEntry() {};
 
-	virtual sint32 getLineNumber() { return -1; }
-
 	// apply relocation or evaluate any expressions for this entry
 	virtual PATCH_RESOLVE_RESULT resolve(PatchContext_t& ctx) = 0;
 };
@@ -76,7 +74,7 @@ public:
 		m_expressionString.assign(expressionStr, expressionLen);
 	}
 
-	sint32 getLineNumber() override { return m_lineNumber; }
+	sint32 getLineNumber() { return m_lineNumber; }
 
 	PATCH_RESOLVE_RESULT resolve(PatchContext_t& ctx) override;
 
@@ -111,7 +109,7 @@ public:
 		m_expressionString.assign(expressionStr, expressionLen);
 	}
 
-	sint32 getLineNumber() override { return m_lineNumber; }
+	sint32 getLineNumber() { return m_lineNumber; }
 
 	PATCH_RESOLVE_RESULT resolve(PatchContext_t& ctx) override;
 
@@ -136,7 +134,7 @@ public:
 		m_symbolName.assign(symbolName, symbolNameLen);
 	}
 
-	sint32 getLineNumber() override { return m_lineNumber; }
+	sint32 getLineNumber() { return m_lineNumber; }
 
 	PATCH_RESOLVE_RESULT resolve(PatchContext_t& ctx) override;
 
@@ -181,8 +179,6 @@ public:
 			delete[] m_dataBackup;
 	}
 
-	sint32 getLineNumber() override { return m_lineNumber; }
-
 	uint32 getAddr() const
 	{
 		return m_addr;
@@ -216,17 +212,11 @@ private:
 	bool m_addrRelocated{};
 };
 
-enum class GPCallbackType {
-    Entry
-};
-
 class PatchGroup
 {
 	friend class GraphicPack2;
 
 public:
-	static constexpr uint32 CODECAVE_MAX_OFFSET = 8 * 1024 * 1024;
-
 	PatchGroup(class GraphicPack2* gp, const char* nameStr, sint32 nameLength) : graphicPack(gp)
 	{
 		name = std::string(nameStr, nameLength);
@@ -266,9 +256,7 @@ private:
 	std::string name;
 	std::vector<uint32> list_moduleMatches;
 	std::vector<PatchEntry*> list_patches;
-	std::vector<std::pair<std::string, GPCallbackType>> list_callbacks;
 	uint32 codeCaveSize;
 	MEMPTR<void> codeCaveMem;
 	bool m_isApplied{};
-	bool m_isRpxOnlyTarget{};
 };

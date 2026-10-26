@@ -2,9 +2,11 @@
 
 struct PPCInterpreter_t;
 
+
 #define OSLIB_FUNCTIONTABLE_TYPE_FUNCTION	(1)
 #define OSLIB_FUNCTIONTABLE_TYPE_POINTER	(2)
 
+void osLib_load();
 void osLib_generateHashFromName(const char* name, uint32* hashA, uint32* hashB);
 sint32 osLib_getFunctionIndex(const char* libraryName, const char* functionName);
 uint32 osLib_getPointer(const char* libraryName, const char* functionName);
@@ -19,19 +21,8 @@ void osLib_returnFromFunction64(PPCInterpreter_t* hCPU, uint64 returnValue64);
 // libs
 #include "Cafe/OS/libs/coreinit/coreinit.h"
 
-// from coreinit but more convenient to have this in the common header
-namespace coreinit
-{
-	enum class RplEntryReason
-	{
-		Loaded = 1,
-		Unloaded = 2,
-	};
-}
-
-// utilities
+// utility functions
 #include "Cafe/OS/common/OSUtil.h"
-#include "Common/CafeStaticVar.h"
 
 // va_list
 struct ppc_va_list

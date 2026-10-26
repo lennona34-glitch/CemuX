@@ -22,8 +22,6 @@ class FileStream
 	bool SetEndOfFile();
 	void extract(std::vector<uint8>& data);
 
-	void Flush();
-
 	// reading
 	uint32 readData(void* data, uint32 length);
 	bool readU64(uint64& v);
@@ -46,9 +44,6 @@ class FileStream
 
 	~FileStream();
 	FileStream() {};
-
-	// atomic helper
-	static bool WriteFileAtomic(const fs::path& path, std::span<uint8> fileData, bool allowTargetFileRename = false);
 
  private:
 	void SyncReadWriteSeek(bool nextOpIsWrite);

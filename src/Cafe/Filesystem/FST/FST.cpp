@@ -13,8 +13,6 @@
 
 #define SET_FST_ERROR(__code) 	if (errorCodeOut) *errorCodeOut = ErrorCode::__code
 
-static_assert(sizeof(NCrypto::AesIv) == 16); // make sure IV is actually 16 bytes
-
 class FSTDataSource
 {
 public:
@@ -200,7 +198,7 @@ bool FSTVolume::FindDiscKey(const fs::path& path, NCrypto::AesKey& discTitleKey)
 	if (dataSource->readData(0, 0, 0x18000 + 0x100, header, sizeof(header)) != sizeof(header))
 		return false;
 
-	// try all the keys in the key cache
+	// try all the keys
 	uint8 headerDecrypted[sizeof(header)-16];
 	for (sint32 i = 0; i < 0x7FFFFFFF; i++)
 	{
@@ -215,12 +213,7 @@ bool FSTVolume::FindDiscKey(const fs::path& path, NCrypto::AesKey& discTitleKey)
 			return true;
 		}
 	}
-
-	// check for a key file next to the WUD file
-	fs::path keyPath = path;
-	keyPath.replace_extension("key");
-	std::unique_ptr<FileStream> keyFile(FileStream::openFile2(keyPath));
-	return keyFile && keyFile->readData(discTitleKey.b, sizeof(discTitleKey.b)) == sizeof(discTitleKey.b);
+	return false;
 }
 
 // open WUD image using key cache
@@ -875,7 +868,7 @@ static_assert(sizeof(FSTHashedBlock) == BLOCK_SIZE);
 struct FSTCachedRawBlock
 {
 	FSTRawBlock blockData;
-	NCrypto::AesIv ivForNextBlock;
+	uint8 ivForNextBlock[16];
 	uint64 lastAccess;
 };
 
@@ -926,13 +919,13 @@ void FSTVolume::TrimCacheIfRequired(FSTCachedRawBlock** droppedRawBlock, FSTCach
 	}
 }
 
-void FSTVolume::DetermineUnhashedBlockIV(uint32 clusterIndex, uint32 blockIndex, NCrypto::AesIv& ivOut)
+void FSTVolume::DetermineUnhashedBlockIV(uint32 clusterIndex, uint32 blockIndex, uint8 ivOut[16])
 {
-	ivOut = {};
+	memset(ivOut, 0, sizeof(ivOut));
 	if(blockIndex == 0)
 	{
-		ivOut.iv[0] = (uint8)(clusterIndex >> 8);
-		ivOut.iv[1] = (uint8)(clusterIndex >> 0);
+		ivOut[0] = (uint8)(clusterIndex >> 8);
+		ivOut[1] = (uint8)(clusterIndex >> 0);
 	}
 	else
 	{
@@ -943,20 +936,20 @@ void FSTVolume::DetermineUnhashedBlockIV(uint32 clusterIndex, uint32 blockIndex,
 		auto itr = m_cacheDecryptedRawBlocks.find(cacheBlockId);
 		if (itr != m_cacheDecryptedRawBlocks.end())
 		{
-			ivOut = itr->second->ivForNextBlock;
+			memcpy(ivOut, itr->second->ivForNextBlock, 16);
 		}
 		else
 		{
-			cemu_assert(m_sectorSize >= NCrypto::AesIv::SIZE);
+			cemu_assert(m_sectorSize >= 16);
 			uint64 clusterOffset = (uint64)m_cluster[clusterIndex].offset * m_sectorSize;
-			NCrypto::AesIv prevIV{};
-			if (m_dataSource->readData(clusterIndex, clusterOffset, blockIndex * m_sectorSize - NCrypto::AesIv::SIZE, prevIV.iv, NCrypto::AesIv::SIZE) != NCrypto::AesIv::SIZE)
+			uint8 prevIV[16];
+			if (m_dataSource->readData(clusterIndex, clusterOffset, blockIndex * m_sectorSize - 16, prevIV, 16) != 16)
 			{
 				cemuLog_log(LogType::Force, "Failed to read IV for raw FST block");
 				m_detectedCorruption = true;
 				return;
 			}
-			ivOut = prevIV;
+			memcpy(ivOut, prevIV, 16);
 		}
 	}
 }
@@ -991,10 +984,10 @@ FSTCachedRawBlock* FSTVolume::GetDecryptedRawBlock(uint32 clusterIndex, uint32 b
 		return nullptr;
 	}
 	// decrypt hash data
-	NCrypto::AesIv iv{};
+	uint8 iv[16]{};
 	DetermineUnhashedBlockIV(clusterIndex, blockIndex, iv);
-	std::copy(block->blockData.rawData.data() + m_sectorSize - NCrypto::AesIv::SIZE, block->blockData.rawData.data() + m_sectorSize, block->ivForNextBlock.iv);
-	AES128_CBC_decrypt(block->blockData.rawData.data(), block->blockData.rawData.data(), m_sectorSize, m_partitionTitlekey.b, iv.iv);
+	memcpy(block->ivForNextBlock, block->blockData.rawData.data() + m_sectorSize - 16, 16);
+	AES128_CBC_decrypt(block->blockData.rawData.data(), block->blockData.rawData.data(), m_sectorSize, m_partitionTitlekey.b, iv);
 	// if this is the next block, then hash it
 	if(cluster.hasContentHash)
 	{

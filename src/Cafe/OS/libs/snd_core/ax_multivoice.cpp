@@ -1,13 +1,12 @@
 #include "Cafe/OS/libs/snd_core/ax.h"
 #include "Cafe/OS/libs/snd_core/ax_internal.h"
 #include "Cafe/HW/MMU/MMU.h"
-#include "Common/CafeStaticVar.h"
 
 namespace snd_core
 {
 	static_assert(sizeof(AXVPBMULTI) == 0x20, "");
 
-	CafeStaticVar<AXVPBMULTI, AX_MAX_VOICES> _buffer__AXVPBMultiVoiceArray{g_sndStaticData};
+	SysAllocator<AXVPBMULTI, AX_MAX_VOICES> _buffer__AXVPBMultiVoiceArray;
 	AXVPBMULTI* __AXVPBMultiVoiceArray;
 
 	void AXMultiVoice_Init()

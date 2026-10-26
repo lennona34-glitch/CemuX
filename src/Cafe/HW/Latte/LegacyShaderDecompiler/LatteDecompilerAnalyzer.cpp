@@ -8,15 +8,6 @@
 #include "Cafe/HW/Latte/Core/FetchShader.h"
 #include "Cafe/HW/Latte/Core/LatteShader.h"
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
-#include "Common/MemPtr.h"
-#include "HW/Latte/ISA/LatteReg.h"
-#ifdef ENABLE_METAL
-#include "HW/Latte/Renderer/Metal/MetalCommon.h"
-#include "HW/Latte/Renderer/Metal/MetalRenderer.h"
-#endif
-
-// Defined in LatteTextureLegacy.cpp
-Latte::E_GX2SURFFMT LatteTexture_ReconstructGX2Format(const Latte::LATTE_SQ_TEX_RESOURCE_WORD1_N& texUnitWord1, const Latte::LATTE_SQ_TEX_RESOURCE_WORD4_N& texUnitWord4);
 
 /*
  * Return index of used color attachment based on shader pixel export index (0-7)
@@ -126,7 +117,6 @@ bool _isIntegerInstruction(const LatteDecompilerALUInstruction& aluInstruction)
 		case ALU_OP2_INST_KILLE:
 		case ALU_OP2_INST_KILLGT:
 		case ALU_OP2_INST_KILLGE:
-		case ALU_OP2_INST_RECIP_CLAMPED:
 		case ALU_OP2_INST_RECIP_FF:
 		case ALU_OP2_INST_RECIP_IEEE:
 		case ALU_OP2_INST_RECIPSQRT_CLAMPED:
@@ -299,15 +289,15 @@ void LatteDecompiler_analyzeTEXClause(LatteDecompilerShaderContext* shaderContex
 	LatteDecompilerShader* shader = shaderContext->shader;
 	for(auto& texInstruction : cfInstruction->instructionsTEX)
 	{
-		if( texInstruction.opcode == GPU7_TEX_INST_SAMPLE ||
-			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_L ||
-			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_LB ||
-			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_LZ ||
-			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_C ||
+		if( texInstruction.opcode == GPU7_TEX_INST_SAMPLE || 
+			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_L || 
+			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_LB || 
+			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_LZ || 
+			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_C || 
 			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_C_L ||
 			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_C_LZ ||
-			texInstruction.opcode == GPU7_TEX_INST_FETCH4 ||
-			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_G ||
+			texInstruction.opcode == GPU7_TEX_INST_FETCH4 || 
+			texInstruction.opcode == GPU7_TEX_INST_SAMPLE_G || 
 			texInstruction.opcode == GPU7_TEX_INST_LD )
 		{
 			if (texInstruction.textureFetch.textureIndex < 0 || texInstruction.textureFetch.textureIndex >= LATTE_NUM_MAX_TEX_UNITS)
@@ -325,7 +315,7 @@ void LatteDecompiler_analyzeTEXClause(LatteDecompilerShaderContext* shaderContex
 			shader->textureUnitSamplerAssignment[texInstruction.textureFetch.textureIndex] = texInstruction.textureFetch.samplerIndex;
 			if( texInstruction.opcode == GPU7_TEX_INST_SAMPLE_C || texInstruction.opcode == GPU7_TEX_INST_SAMPLE_C_L || texInstruction.opcode == GPU7_TEX_INST_SAMPLE_C_LZ)
 				shader->textureUsesDepthCompare[texInstruction.textureFetch.textureIndex] = true;
-
+			
 			bool useTexelCoords = false;
 			if (texInstruction.opcode == GPU7_TEX_INST_SAMPLE && (texInstruction.textureFetch.unnormalized[0] && texInstruction.textureFetch.unnormalized[1] && texInstruction.textureFetch.unnormalized[2] && texInstruction.textureFetch.unnormalized[3]))
 				useTexelCoords = true;
@@ -394,7 +384,7 @@ void LatteDecompiler_analyzeExport(LatteDecompilerShaderContext* shaderContext, 
 	LatteDecompilerShader* shader = shaderContext->shader;
 	if( shader->shaderType == LatteConst::ShaderType::Pixel )
 	{
-		if (cfInstruction->exportType == 0 && cfInstruction->exportArrayBase < 8)
+		if( cfInstruction->exportType == 0 && cfInstruction->exportArrayBase < 8 )
 		{
 			// remember color outputs that are written
 			for(uint32 i=0; i<(cfInstruction->exportBurstCount+1); i++)
@@ -403,11 +393,9 @@ void LatteDecompiler_analyzeExport(LatteDecompilerShaderContext* shaderContext, 
 				shader->pixelColorOutputMask |= (1<<colorOutputIndex);
 			}
 		}
-		else if (cfInstruction->exportType == 0 && cfInstruction->exportArrayBase == 61)
+		else if( cfInstruction->exportType == 0 && cfInstruction->exportArrayBase == 61 )
 		{
-			// Only check for depth buffer mask on Metal, as its not in the PS hash on other backends
-			if (g_renderer->GetType() != RendererAPI::Metal || LatteMRT::GetActiveDepthBufferMask(*shaderContext->contextRegistersNew))
-				shader->depthMask = true;
+			// writes pixel depth
 		}
 		else
 			debugBreakpoint();
@@ -416,16 +404,7 @@ void LatteDecompiler_analyzeExport(LatteDecompilerShaderContext* shaderContext, 
 	{
 		if (cfInstruction->exportType == 2 && cfInstruction->exportArrayBase < 32)
 		{
-			for (uint32 burstIndex = 0; burstIndex < (cfInstruction->exportBurstCount + 1); burstIndex++)
-			{
-				uint32 paramIndex = cfInstruction->exportArrayBase + burstIndex;
-				if (paramIndex >= 32)
-				{
-					cemu_assert_unimplemented();
-					break;
-				}
-				shaderContext->shader->outputParameterMask |= (1u << paramIndex);
-			}
+			shaderContext->shader->outputParameterMask |= (1<<cfInstruction->exportArrayBase);
 		}
 		else if (cfInstruction->exportType == 1 && cfInstruction->exportArrayBase == GPU7_DECOMPILER_CF_EXPORT_POINT_SIZE)
 		{
@@ -442,7 +421,7 @@ void LatteDecompiler_analyzeExport(LatteDecompilerShaderContext* shaderContext, 
 void LatteDecompiler_analyzeSubroutine(LatteDecompilerShaderContext* shaderContext, uint32 cfAddr)
 {
 	// analyze CF and clauses up to RET statement
-
+	
 	// todo - find cfInstruction index from cfAddr
 	cemu_assert_debug(false);
 
@@ -493,60 +472,33 @@ namespace LatteDecompiler
 	void _initTextureBindingPointsGL(LatteDecompilerShaderContext* decompilerContext)
 	{
 		// for OpenGL we use the relative texture unit index
-		sint8 bindingBase = 0;
-		if (decompilerContext->shaderType == LatteConst::ShaderType::Vertex)
-			bindingBase = LATTE_CEMU_VS_TEX_UNIT_BASE;
-		else if (decompilerContext->shaderType == LatteConst::ShaderType::Geometry)
-			bindingBase = LATTE_CEMU_GS_TEX_UNIT_BASE;
-		else if (decompilerContext->shaderType == LatteConst::ShaderType::Pixel)
-			bindingBase = LATTE_CEMU_PS_TEX_UNIT_BASE;
-
 		for (sint32 i = 0; i < LATTE_NUM_MAX_TEX_UNITS; i++)
 		{
 			if (!decompilerContext->output->textureUnitMask[i])
 				continue;
-			decompilerContext->output->resourceMappingGL.textureUnitToBindingPoint[i] = bindingBase + i;
+			sint32 textureBindingPoint;
+			if (decompilerContext->shaderType == LatteConst::ShaderType::Vertex)
+				textureBindingPoint = i + LATTE_CEMU_VS_TEX_UNIT_BASE;
+			else if (decompilerContext->shaderType == LatteConst::ShaderType::Geometry)
+				textureBindingPoint = i + LATTE_CEMU_GS_TEX_UNIT_BASE;
+			else if (decompilerContext->shaderType == LatteConst::ShaderType::Pixel)
+				textureBindingPoint = i + LATTE_CEMU_PS_TEX_UNIT_BASE;
+
+			decompilerContext->output->resourceMappingGL.textureUnitToBindingPoint[i] = textureBindingPoint;
 		}
 	}
 
 	void _initTextureBindingPointsVK(LatteDecompilerShaderContext* decompilerContext)
 	{
 		// for Vulkan we use consecutive indices
-		decompilerContext->output->resourceMappingVK.textureUnitBaseBindingPoint = decompilerContext->currentBindingPointVK;
-		sint32 relBindingPointIndex = 0;
 		for (sint32 i = 0; i < LATTE_NUM_MAX_TEX_UNITS; i++)
 		{
 			if (!decompilerContext->output->textureUnitMask[i])
 				continue;
 			decompilerContext->output->resourceMappingVK.textureUnitToBindingPoint[i] = decompilerContext->currentBindingPointVK;
-			decompilerContext->output->resourceMappingVK.relBindingPointToRelTextureUnit[relBindingPointIndex] = i;
-			relBindingPointIndex++;
-			decompilerContext->output->resourceMappingVK.textureUnitCount++;
 			decompilerContext->currentBindingPointVK++;
 		}
-		if (relBindingPointIndex==0)
-			decompilerContext->output->resourceMappingVK.textureUnitBaseBindingPoint = -1;
 	}
-
-#ifdef ENABLE_METAL
-	void _initTextureBindingPointsMTL(LatteDecompilerShaderContext* decompilerContext)
-	{
-		decompilerContext->output->resourceMappingMTL.textureUnitBaseBindingPoint = decompilerContext->currentTextureBindingPointMTL;
-		sint32 relBindingPointIndex = 0;
-		for (sint32 i = 0; i < LATTE_NUM_MAX_TEX_UNITS; i++)
-		{
-			if (!decompilerContext->output->textureUnitMask[i] || decompilerContext->shader->textureRenderTargetIndex[i] != 255)
-				continue;
-			decompilerContext->output->resourceMappingMTL.textureUnitToBindingPoint[i] = decompilerContext->currentTextureBindingPointMTL;
-			decompilerContext->output->resourceMappingMTL.relBindingPointToRelTextureUnit[relBindingPointIndex] = i;
-			relBindingPointIndex++;
-			decompilerContext->output->resourceMappingMTL.textureUnitCount++;
-			decompilerContext->currentTextureBindingPointMTL++;
-		}
-		if (relBindingPointIndex==0)
-			decompilerContext->output->resourceMappingMTL.textureUnitBaseBindingPoint = -1;
-	}
-#endif
 
 	void _initHasUniformVarBlock(LatteDecompilerShaderContext* decompilerContext)
 	{
@@ -555,9 +507,9 @@ namespace LatteDecompiler
 			decompilerContext->hasUniformVarBlock = true;
 		else if (decompilerContext->shader->uniformMode == LATTE_DECOMPILER_UNIFORM_MODE_FULL_CFILE)
 			decompilerContext->hasUniformVarBlock = true;
-
-		bool hasAnyViewportScaleDisabled =
-			!decompilerContext->contextRegistersNew->PA_CL_VTE_CNTL.get_VPORT_X_SCALE_ENA() ||
+		
+		bool hasAnyViewportScaleDisabled = 
+			!decompilerContext->contextRegistersNew->PA_CL_VTE_CNTL.get_VPORT_X_SCALE_ENA() || 
 			!decompilerContext->contextRegistersNew->PA_CL_VTE_CNTL.get_VPORT_Y_SCALE_ENA() ||
 			!decompilerContext->contextRegistersNew->PA_CL_VTE_CNTL.get_VPORT_Z_SCALE_ENA();
 		// we currently only support all on/off. Individual component scaling is not supported
@@ -573,7 +525,7 @@ namespace LatteDecompiler
 		bool alphaTestEnable = decompilerContext->contextRegistersNew->SX_ALPHA_TEST_CONTROL.get_ALPHA_TEST_ENABLE();
 		if (decompilerContext->shaderType == LatteConst::ShaderType::Pixel && alphaTestEnable != 0)
 			decompilerContext->hasUniformVarBlock = true; // uf_alphaTestRef
-		if (decompilerContext->shaderType == LatteConst::ShaderType::Pixel && decompilerContext->analyzer.hasFragCoordAccess)
+		if (decompilerContext->shaderType == LatteConst::ShaderType::Pixel)
 			decompilerContext->hasUniformVarBlock = true; // uf_fragCoordScale
 		if (decompilerContext->shaderType == LatteConst::ShaderType::Vertex && decompilerContext->analyzer.outputPointSize && decompilerContext->analyzer.writesPointSize == false)
 			decompilerContext->hasUniformVarBlock = true; // uf_pointSize
@@ -585,23 +537,6 @@ namespace LatteDecompiler
 		{
 			decompilerContext->hasUniformVarBlock = true; // uf_verticesPerInstance and uf_streamoutBufferBase*
 		}
-#ifdef ENABLE_METAL
-		if (g_renderer->GetType() == RendererAPI::Metal)
-		{
-			if (static_cast<MetalRenderer*>(g_renderer.get())->SupportsFramebufferFetch())
-			{
-				for (sint32 t = 0; t < LATTE_NUM_MAX_TEX_UNITS; t++)
-				{
-					if (decompilerContext->shader->textureRenderTargetIndex[t] != 255)
-						decompilerContext->hasUniformVarBlock = true; // framebufferFetchSize
-				}
-			}
-            bool usesGeometryShader = UseGeometryShader(*decompilerContext->contextRegistersNew, decompilerContext->options->usesGeometryShader);
-
-		    if (decompilerContext->shaderType == LatteConst::ShaderType::Vertex && usesGeometryShader)
-				decompilerContext->hasUniformVarBlock = true; // uf_verticesPerInstance
-		}
-#endif
 	}
 
 	void _initUniformBindingPoints(LatteDecompilerShaderContext* decompilerContext)
@@ -619,18 +554,14 @@ namespace LatteDecompiler
 			}
 		}
 		// assign binding point to uniform var block
+		decompilerContext->output->resourceMappingGL.uniformVarsBufferBindingPoint = -1; // OpenGL currently doesnt use a uniform block
 		if (decompilerContext->hasUniformVarBlock)
 		{
 			decompilerContext->output->resourceMappingVK.uniformVarsBufferBindingPoint = decompilerContext->currentBindingPointVK;
 			decompilerContext->currentBindingPointVK++;
-			decompilerContext->output->resourceMappingMTL.uniformVarsBufferBindingPoint = decompilerContext->currentBufferBindingPointMTL;
-			decompilerContext->currentBufferBindingPointMTL++;
 		}
-		else if (decompilerContext->shaderType == LatteConst::ShaderType::Pixel) // compatibility workaround to keep binding indices the same with existing gfx pack shader replacements, we now only emit uf_fragCoord when needed and it can lead to hasUniformVarBlock being false
-		{
-			decompilerContext->currentBindingPointVK++;
-			decompilerContext->currentBufferBindingPointMTL++;
-		}
+		else
+			decompilerContext->output->resourceMappingVK.uniformVarsBufferBindingPoint = -1;
 		// assign binding points to uniform buffers
 		if (decompilerContext->shader->uniformMode == LATTE_DECOMPILER_UNIFORM_MODE_FULL_CBANK)
 		{
@@ -649,8 +580,6 @@ namespace LatteDecompiler
 
 				decompilerContext->output->resourceMappingVK.uniformBuffersBindingPoint[i] = decompilerContext->currentBindingPointVK;
 				decompilerContext->currentBindingPointVK++;
-				decompilerContext->output->resourceMappingMTL.uniformBuffersBindingPoint[i] = decompilerContext->currentBufferBindingPointMTL;
-				decompilerContext->currentBufferBindingPointMTL++;
 			}
 			// for OpenGL we use the relative buffer index
 			for (uint32 i = 0; i < LATTE_NUM_MAX_UNIFORM_BUFFERS; i++)
@@ -672,8 +601,6 @@ namespace LatteDecompiler
 		{
 			decompilerContext->output->resourceMappingVK.tfStorageBindingPoint = decompilerContext->currentBindingPointVK;
 			decompilerContext->currentBindingPointVK++;
-			decompilerContext->output->resourceMappingMTL.tfStorageBindingPoint = decompilerContext->currentBufferBindingPointMTL;
-			decompilerContext->currentBufferBindingPointMTL++;
 		}
 	}
 
@@ -690,7 +617,6 @@ namespace LatteDecompiler
 			{
 				decompilerContext->output->resourceMappingGL.attributeMapping[i] = bindingIndex;
 				decompilerContext->output->resourceMappingVK.attributeMapping[i] = bindingIndex;
-				decompilerContext->output->resourceMappingMTL.attributeMapping[i] = bindingIndex;
 				bindingIndex++;
 			}
 		}
@@ -879,7 +805,7 @@ void LatteDecompiler_analyze(LatteDecompilerShaderContext* shaderContext, LatteD
 
 	for(sint32 i=0; i<LATTE_NUM_MAX_TEX_UNITS; i++)
 	{
-		if (!shaderContext->output->textureUnitMask[i])
+		if (!shaderContext->output->textureUnitMask[i]) 
 		{
 			// texture unit not used
 			shader->textureUnitDim[i] = (Latte::E_DIM)0xFF;
@@ -901,78 +827,6 @@ void LatteDecompiler_analyze(LatteDecompilerShaderContext* shaderContext, LatteD
 			shader->textureUnitList[shader->textureUnitListCount] = i;
 			shader->textureUnitListCount++;
 		}
-		shader->textureRenderTargetIndex[i] = 255;
-	}
-	// check if textures are used as render targets
-	if (shader->shaderType == LatteConst::ShaderType::Pixel)
-	{
-		struct {
-		    sint32 index;
-		    MPTR physAddr;
-			Latte::E_GX2SURFFMT format;
-			Latte::E_HWTILEMODE tileMode;
-		} colorBuffers[LATTE_NUM_COLOR_TARGET]{};
-
-        uint8 colorBufferMask = LatteMRT::GetActiveColorBufferMask(shader, *shaderContext->contextRegistersNew);
-        sint32 colorBufferCount = 0;
-		for (sint32 i = 0; i < LATTE_NUM_COLOR_TARGET; i++)
-        {
-            auto& colorBuffer = colorBuffers[colorBufferCount];
-            if (((colorBufferMask) & (1 << i)) == 0)
-                continue; // color buffer not enabled
-
-            uint32* colorBufferRegBase = shaderContext->contextRegisters + (mmCB_COLOR0_BASE + i);
-           	uint32 regColorBufferBase = colorBufferRegBase[mmCB_COLOR0_BASE - mmCB_COLOR0_BASE] & 0xFFFFFF00; // the low 8 bits are ignored? How to Survive seems to rely on this
-
-            uint32 regColorInfo = colorBufferRegBase[mmCB_COLOR0_INFO - mmCB_COLOR0_BASE];
-
-           	MPTR colorBufferPhysMem = regColorBufferBase;
-            Latte::E_HWTILEMODE colorBufferTileMode = (Latte::E_HWTILEMODE)((regColorInfo >> 8) & 0xF);
-
-            Latte::E_GX2SURFFMT colorBufferFormat = LatteMRT::GetColorBufferFormat(i, *shaderContext->contextRegistersNew);
-
-            colorBuffer = {i, colorBufferPhysMem, colorBufferFormat, colorBufferTileMode};
-            colorBufferCount++;
-        }
-
-	    for (sint32 i = 0; i < shader->textureUnitListCount; i++)
-        {
-            sint32 textureIndex = shader->textureUnitList[i];
-      		const auto& texRegister = texRegs[textureIndex];
-
-      		// get physical address of texture data
-      		MPTR physAddr = (texRegister.word2.get_BASE_ADDRESS() << 8);
-      		if (physAddr == MPTR_NULL)
-                continue; // invalid data
-
-            auto tileMode = texRegister.word0.get_TILE_MODE();
-
-            // Check for dimension
-            auto dim = shader->textureUnitDim[textureIndex];
-            // TODO: 2D arrays could be supported as well
-            if (dim != Latte::E_DIM::DIM_2D)
-                continue;
-
-            // Check for mip level
-            auto lastMip = texRegister.word5.get_LAST_LEVEL();
-            // TODO: multiple mip levels could be supported as well
-            if (lastMip != 0)
-                continue;
-
-            Latte::E_GX2SURFFMT format = LatteTexture_ReconstructGX2Format(texRegister.word1, texRegister.word4);
-
-            // Check if the texture is used as render target
-            for (sint32 j = 0; j < colorBufferCount; j++)
-            {
-                const auto& colorBuffer = colorBuffers[j];
-
-                if (physAddr == colorBuffer.physAddr && format == colorBuffer.format && tileMode == colorBuffer.tileMode)
-                {
-                    shader->textureRenderTargetIndex[textureIndex] = colorBuffer.index;
-                    break;
-                }
-            }
-        }
 	}
 	// for geometry shaders check the copy shader for stream writes
 	if (shader->shaderType == LatteConst::ShaderType::Geometry && shaderContext->parsedGSCopyShader->list_streamWrites.empty() == false)
@@ -1028,38 +882,6 @@ void LatteDecompiler_analyze(LatteDecompilerShaderContext* shaderContext, LatteD
 		for (sint32 i = 0; i < psInputTable->count; i++)
 		{
 			shaderContext->analyzer.gprUseMask[i / 8] |= (1 << (i % 8));
-		}
-	}
-	// check if shader accesses frag coord
-	if (shader->shaderType == LatteConst::ShaderType::Pixel)
-	{
-		LatteShaderPSInputTable* psInputTable = LatteSHRC_GetPSInputTable();
-		for (sint32 i = 0; i < psInputTable->count; i++)
-		{
-			sint32 gprIndex = i;
-			if ((shaderContext->analyzer.gprUseMask[gprIndex / 8] & (1 << (gprIndex % 8))) == 0 && shaderContext->analyzer.usesRelativeGPRRead == false)
-				continue;
-			uint32 psInputSemanticId = psInputTable->import[i].semanticId;
-			if (psInputSemanticId == LATTE_ANALYZER_IMPORT_INDEX_SPIPOSITION)
-			{
-				shaderContext->analyzer.hasFragCoordAccess = true;
-				break;
-			}
-		}
-		// some existing graphic pack replacement shaders rely on uf_fragCoordScale despite the original shader not needing it. We handle these exceptions here
-		switch (shaderContext->shaderBaseHash)
-		{
-		case 0x21e6bc9b0cdbe8d7: case 0x37040a485a29d54e: case 0x37a4ec1a7dbc7391:
-		case 0x50e29e8929cea348: case 0x572a6cfa3943923d: case 0x59df1c7e1806366c:
-		case 0x6ea8b1aa69c0b6f7: case 0x88133ee405eaae28: case 0x95a5a89d62998e0d:
-		case 0x998a9f67e353657b: case 0x9f6adb9a651f84b9: case 0xa5e9d150276a805c:
-		case 0xa7f4801a8d29e333: case 0xbe99d80628d31127: case 0xc14019840473ff86:
-		case 0xc612390d4c70f430: case 0xcb0e6e8cbec4502a: case 0xe334517825fdd599:
-		case 0xe39a2a718bc419fe: case 0xfdf33c607cd1d737: case 0xff71dcd2ad4defdc:
-			shaderContext->analyzer.hasFragCoordAccess = true;
-			break;
-		default:
-			break;
 		}
 	}
 	// analyze CF stack
@@ -1180,12 +1002,6 @@ void LatteDecompiler_analyze(LatteDecompilerShaderContext* shaderContext, LatteD
 		shaderContext->output->resourceMappingVK.setIndex = 2;
 	LatteDecompiler::_initTextureBindingPointsGL(shaderContext);
 	LatteDecompiler::_initTextureBindingPointsVK(shaderContext);
-#ifdef ENABLE_METAL
-	LatteDecompiler::_initTextureBindingPointsMTL(shaderContext);
-#endif
 	LatteDecompiler::_initUniformBindingPoints(shaderContext);
 	LatteDecompiler::_initAttributeBindingPoints(shaderContext);
-	shaderContext->output->resourceMappingMTL.verticesPerInstanceBinding = shaderContext->currentBufferBindingPointMTL++;
-	shaderContext->output->resourceMappingMTL.indexBufferBinding = shaderContext->currentBufferBindingPointMTL++;
-	shaderContext->output->resourceMappingMTL.indexTypeBinding = shaderContext->currentBufferBindingPointMTL++;
 }

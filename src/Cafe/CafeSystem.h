@@ -1,10 +1,11 @@
 #pragma once
 #include "Cafe/OS/RPL/rpl.h"
+#include "util/helpers/Semaphore.h"
 #include "Cafe/TitleList/TitleId.h"
+#include "config/CemuConfig.h"
 
 enum class CosCapabilityBits : uint64;
 enum class CosCapabilityGroup : uint32;
-enum class CafeConsoleRegion;
 
 namespace CafeSystem
 {
@@ -12,7 +13,6 @@ namespace CafeSystem
 	{
 	public:
 		virtual void CafeRecreateCanvas() = 0;
-		virtual void CafePPCProcessExit() = 0; // emulated process exited
 	};
 
 	enum class PREPARE_STATUS_CODE
@@ -44,7 +44,6 @@ namespace CafeSystem
 	std::string GetForegroundTitleArgStr();
 	uint32 GetForegroundTitleOlvAccesskey();
 	CosCapabilityBits GetForegroundTitleCosCapabilities(CosCapabilityGroup group);
-	std::optional<sint32> GetForegroundTitleReturnStatus(); // valid once the foreground title exited gracefully via coreinit exit
 
 	void ShutdownTitle();
 
@@ -55,10 +54,8 @@ namespace CafeSystem
 
 	uint32 GetRPXHashBase();
 	uint32 GetRPXHashUpdated();
-	void RequestRecreateCanvas();
-	void NotifyPPCProcessExit(sint32 status);
 
-	void DumpCurrentRPX();
+	void RequestRecreateCanvas();
 };
 
 extern RPLModule* applicationRPX;

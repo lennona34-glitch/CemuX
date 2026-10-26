@@ -1,16 +1,17 @@
 #include "Cafe/OS/common/OSCommon.h"
 #include "Cafe/HW/Espresso/PPCCallback.h"
+#include <bitset>
+#include <mutex>
 #include "nsyshid.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
 #include "Backend.h"
 #include "Whitelist.h"
 
-
 namespace nsyshid
 {
-	constinit COSStaticData s_nsyshidStaticData;
 
 	std::list<std::shared_ptr<Backend>> backendList;
+
 	std::list<std::shared_ptr<Device>> deviceList;
 
 	typedef struct _HIDClient_t
@@ -74,7 +75,7 @@ namespace nsyshid
 
 	const int HID_MAX_NUM_DEVICES = 128;
 
-	CafeStaticVar<HID_t, HID_MAX_NUM_DEVICES> HIDPool{s_nsyshidStaticData};
+	SysAllocator<HID_t, HID_MAX_NUM_DEVICES> HIDPool;
 	std::queue<size_t> HIDPoolIndexQueue;
 
 	void InitHIDPoolIndexQueue()
@@ -95,9 +96,6 @@ namespace nsyshid
 	HID_t* GetFreeHID()
 	{
 		std::lock_guard<std::recursive_mutex> lock(hidMutex);
-		cemu_assert_debug(HIDPool.IsAllocated());
-		if (!HIDPool.IsAllocated())
-			return nullptr;
 		InitHIDPoolIndexQueue();
 		if (HIDPoolIndexQueue.empty())
 		{
@@ -258,17 +256,17 @@ namespace nsyshid
 						 device->m_productId);
 	}
 
-	std::shared_ptr<Device> FindDeviceById(uint16 vendorId, uint16 productId)
+	bool FindDeviceById(uint16 vendorId, uint16 productId)
 	{
 		std::lock_guard<std::recursive_mutex> lock(hidMutex);
 		for (const auto& device : deviceList)
 		{
 			if (device->m_vendorId == vendorId && device->m_productId == productId)
 			{
-				return device;
+				return true;
 			}
 		}
-		return nullptr;
+		return false;
 	}
 
 	void export_HIDAddClient(PPCInterpreter_t* hCPU)
@@ -878,7 +876,7 @@ namespace nsyshid
 		return nullptr;
 	}
 
-	std::shared_ptr<Device> Backend::FindDeviceById(uint16 vendorId, uint16 productId)
+	bool Backend::FindDeviceById(uint16 vendorId, uint16 productId)
 	{
 		return nsyshid::FindDeviceById(vendorId, productId);
 	}
@@ -946,66 +944,23 @@ namespace nsyshid
 		this->m_hid = hid;
 	}
 
-	class : public COSModule
+	void load()
 	{
-		public:
-		std::string_view GetName() override
-		{
-			return "nsyshid";
-		}
+		osLib_addFunction("nsyshid", "HIDAddClient", export_HIDAddClient);
+		osLib_addFunction("nsyshid", "HIDDelClient", export_HIDDelClient);
+		osLib_addFunction("nsyshid", "HIDGetDescriptor", export_HIDGetDescriptor);
+		osLib_addFunction("nsyshid", "HIDSetIdle", export_HIDSetIdle);
+		osLib_addFunction("nsyshid", "HIDSetProtocol", export_HIDSetProtocol);
+		osLib_addFunction("nsyshid", "HIDSetReport", export_HIDSetReport);
 
-		void RPLUnmapped() override
-		{
-			// Stop backends and drop callbacks before their guest descriptors go away.
-			{
-				std::lock_guard<std::recursive_mutex> lock(hidMutex);
-				HIDClientList.clear();
-			}
-			DetachAllBackends();
-			std::list<std::shared_ptr<Device>> remainingDevices;
-			{
-				std::lock_guard<std::recursive_mutex> lock(hidMutex);
-				remainingDevices = deviceList;
-			}
-			for (const auto& device : remainingDevices)
-				DetachDevice(device);
-			std::lock_guard<std::recursive_mutex> lock(hidMutex);
-			s_nsyshidStaticData.Deallocate();
-		}
+		osLib_addFunction("nsyshid", "HIDRead", export_HIDRead);
+		osLib_addFunction("nsyshid", "HIDWrite", export_HIDWrite);
 
-		void RPLMapped() override
-		{
-			s_nsyshidStaticData.Allocate();
-			osLib_addFunction("nsyshid", "HIDAddClient", export_HIDAddClient);
-			osLib_addFunction("nsyshid", "HIDDelClient", export_HIDDelClient);
-			osLib_addFunction("nsyshid", "HIDGetDescriptor", export_HIDGetDescriptor);
-			osLib_addFunction("nsyshid", "HIDSetIdle", export_HIDSetIdle);
-			osLib_addFunction("nsyshid", "HIDSetProtocol", export_HIDSetProtocol);
-			osLib_addFunction("nsyshid", "HIDSetReport", export_HIDSetReport);
+		osLib_addFunction("nsyshid", "HIDDecodeError", export_HIDDecodeError);
 
-			osLib_addFunction("nsyshid", "HIDRead", export_HIDRead);
-			osLib_addFunction("nsyshid", "HIDWrite", export_HIDWrite);
+		// initialise whitelist
+		Whitelist::GetInstance();
 
-			osLib_addFunction("nsyshid", "HIDDecodeError", export_HIDDecodeError);
-
-		};
-		void rpl_entry(uint32 moduleHandle, coreinit::RplEntryReason reason) override
-		{
-			if (reason == coreinit::RplEntryReason::Loaded)
-			{
-				// initialise whitelist
-				Whitelist::GetInstance();
-				AttachDefaultBackends();
-			}
-			else if (reason == coreinit::RplEntryReason::Unloaded)
-			{
-			}
-		}
-	}s_COSnsyshidModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSnsyshidModule;
+		AttachDefaultBackends();
 	}
-
 } // namespace nsyshid

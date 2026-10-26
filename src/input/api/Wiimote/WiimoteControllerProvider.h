@@ -23,7 +23,7 @@ class WiimoteControllerProvider : public ControllerProviderBase
 public:
 	constexpr static uint32 kDefaultPacketDelay = 25;
 
-	WiimoteControllerProvider() = default;
+	WiimoteControllerProvider();
 	~WiimoteControllerProvider();
 
 	inline static InputAPI::Type kAPIType = InputAPI::Wiimote;
@@ -75,13 +75,11 @@ public:
 	
 
 private:
-	std::atomic_bool m_threadsRunning{false};
+	std::atomic_bool m_running = false;
 	std::thread m_reader_thread, m_writer_thread;
 	std::shared_mutex m_device_mutex;
 
 	std::thread m_connectionThread;
-	std::mutex m_connectionMutex;
-    std::condition_variable m_connectionCond;
 	std::vector<WiimoteDevicePtr> m_connectedDevices;
 	std::mutex m_connectedDeviceMutex;
 	struct Wiimote
@@ -103,11 +101,6 @@ private:
 	std::list<std::pair<size_t,std::vector<uint8>>> m_write_queue;
 	std::mutex m_writer_mutex;
 	std::condition_variable m_writer_cond;
-
-	void StartThreads();
-	void StopThreads();
-	void FindDevices();
-	void RefreshControllers();
 
 	void reader_thread();
 	void writer_thread();

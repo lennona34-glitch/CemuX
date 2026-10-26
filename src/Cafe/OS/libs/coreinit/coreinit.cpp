@@ -69,7 +69,7 @@ sint32 ScoreStackTrace(OSThread_t* thread, MPTR sp)
 	return score;
 }
 
-void DebugLogStackTrace(OSThread_t* thread, MPTR sp)
+void DebugLogStackTrace(OSThread_t* thread, MPTR sp, bool printSymbols)
 {
 	// sp might not point to a valid stackframe
 	// scan stack and evaluate which sp is most likely the beginning of the stackframe
@@ -88,7 +88,10 @@ void DebugLogStackTrace(OSThread_t* thread, MPTR sp)
 		}
 	}
 
-	cemuLog_log(LogType::Force, fmt::format("Trace starting at SP {:08x} r1={:08x}", highestScoreSP, sp));
+	if (highestScoreSP != sp)
+		cemuLog_log(LogType::Force, fmt::format("Trace starting at SP {0:08x} r1 = {1:08x}", highestScoreSP, sp));
+	else
+		cemuLog_log(LogType::Force, fmt::format("Trace starting at SP/r1 {0:08x}", highestScoreSP));
 
 	// print stack trace
 	uint32 currentStackPtr = highestScoreSP;
@@ -105,7 +108,9 @@ void DebugLogStackTrace(OSThread_t* thread, MPTR sp)
 		uint32 returnAddress = 0;
 		returnAddress = memory_readU32(nextStackPtr + 4);
 
-		RPLStoredSymbol* symbol = rplSymbolStorage_getByClosestAddress(returnAddress);
+		RPLStoredSymbol* symbol = nullptr;
+		if(printSymbols)
+			symbol = rplSymbolStorage_getByClosestAddress(returnAddress);
 
 		if(symbol)
 			cemuLog_log(LogType::Force, fmt::format("SP {:08x} ReturnAddr {:08x}   ({}.{}+0x{:x})", nextStackPtr, returnAddress, (const char*)symbol->libName, (const char*)symbol->symbolName, returnAddress - symbol->address));
@@ -184,8 +189,6 @@ void coreinitExport_OSGetSharedData(PPCInterpreter_t* hCPU)
 
 namespace coreinit
 {
-	COSStaticData g_coreinitStaticData;
-
 	sint32 OSGetCoreId()
 	{
 		return PPCInterpreter_getCoreIndex(PPCInterpreter_getCurrentInstance());
@@ -240,6 +243,15 @@ namespace coreinit
 		osLib_returnFromFunction(hCPU, 1);
 	}
 
+	void coreinit_exit(uint32 r)
+	{
+		cemuLog_log(LogType::Force, "The title terminated the process by calling coreinit.exit({})", (sint32)r);
+        DebugLogStackTrace(coreinit::OSGetCurrentThread(), coreinit::OSGetStackPointer());
+		cemu_assert_debug(false);
+		// never return
+		while (true) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+
 	bool OSIsOffBoot()
 	{
 		return true;
@@ -282,117 +294,79 @@ namespace coreinit
 
 		osLib_addFunction("coreinit", "ENVGetEnvironmentVariable", coreinitExport_ENVGetEnvironmentVariable);
 
+		cafeExportRegisterFunc(coreinit_exit, "coreinit", "exit", LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSIsOffBoot, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSGetBootPMFlags, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSGetSystemMode, LogType::CoreinitThread);
 
 		cafeExportRegister("coreinit", OSPanic, LogType::Placeholder);
 	}
+};
 
-	class : public COSModule
-	{
-		public:
-		std::string_view GetName() override
-		{
-			return "coreinit";
-		}
+void coreinit_load()
+{
+	coreinit::InitializeCore();
+	coreinit::InitializeSchedulerLock();
+	coreinit::InitializeSysHeap();
 
-		void RPLMapped() override
-		{
-			g_coreinitStaticData.Allocate();
-			coreinit::InitializeCore();
-			coreinit::InitializeSchedulerLock();
-			coreinit::InitializeSysHeap();
+	// allocate coreinit global data
+	gCoreinitData = (CoreinitSharedData*)memory_getPointerFromVirtualOffset(coreinit_allocFromSysArea(sizeof(CoreinitSharedData), 32));
+	memset(gCoreinitData, 0x00, sizeof(CoreinitSharedData));
 
-			// allocate coreinit global data
-			if (!gCoreinitData)
-				gCoreinitData = (CoreinitSharedData*)memory_getPointerFromVirtualOffset(coreinit_allocFromSysArea(sizeof(CoreinitSharedData), 32));
-			memset(gCoreinitData, 0x00, sizeof(CoreinitSharedData));
+	// coreinit weak links
+	osLib_addVirtualPointer("coreinit", "MEMAllocFromDefaultHeap", memory_getVirtualOffsetFromPointer(&gCoreinitData->MEMAllocFromDefaultHeap));
+	osLib_addVirtualPointer("coreinit", "MEMAllocFromDefaultHeapEx", memory_getVirtualOffsetFromPointer(&gCoreinitData->MEMAllocFromDefaultHeapEx));
+	osLib_addVirtualPointer("coreinit", "MEMFreeToDefaultHeap", memory_getVirtualOffsetFromPointer(&gCoreinitData->MEMFreeToDefaultHeap));
+	osLib_addVirtualPointer("coreinit", "__atexit_cleanup", memory_getVirtualOffsetFromPointer(&gCoreinitData->__atexit_cleanup));
+	osLib_addVirtualPointer("coreinit", "__stdio_cleanup", memory_getVirtualOffsetFromPointer(&gCoreinitData->__stdio_cleanup));
+	osLib_addVirtualPointer("coreinit", "__cpp_exception_cleanup_ptr", memory_getVirtualOffsetFromPointer(&gCoreinitData->__cpp_exception_cleanup_ptr));
+	osLib_addVirtualPointer("coreinit", "__cpp_exception_init_ptr", memory_getVirtualOffsetFromPointer(&gCoreinitData->__cpp_exception_init_ptr));
 
-			// coreinit weak links
-			osLib_addVirtualPointer("coreinit", "MEMAllocFromDefaultHeap", memory_getVirtualOffsetFromPointer(&gCoreinitData->MEMAllocFromDefaultHeap));
-			osLib_addVirtualPointer("coreinit", "MEMAllocFromDefaultHeapEx", memory_getVirtualOffsetFromPointer(&gCoreinitData->MEMAllocFromDefaultHeapEx));
-			osLib_addVirtualPointer("coreinit", "MEMFreeToDefaultHeap", memory_getVirtualOffsetFromPointer(&gCoreinitData->MEMFreeToDefaultHeap));
-			osLib_addVirtualPointer("coreinit", "__atexit_cleanup", memory_getVirtualOffsetFromPointer(&gCoreinitData->__atexit_cleanup));
-			osLib_addVirtualPointer("coreinit", "__stdio_cleanup", memory_getVirtualOffsetFromPointer(&gCoreinitData->__stdio_cleanup));
-			osLib_addVirtualPointer("coreinit", "__cpp_exception_cleanup_ptr", memory_getVirtualOffsetFromPointer(&gCoreinitData->__cpp_exception_cleanup_ptr));
-			osLib_addVirtualPointer("coreinit", "__cpp_exception_init_ptr", memory_getVirtualOffsetFromPointer(&gCoreinitData->__cpp_exception_init_ptr));
+	// init GHS and threads
+	coreinit::PrepareGHSRuntime();
+	coreinit::InitializeThread();
 
-			// init GHS and threads
-			coreinit::PrepareGHSRuntime();
-			coreinit::MapThreadExports();
+	// reset threads
+	activeThreadCount = 0;
+	// init submodules
+	coreinit::InitializeMEM();
+	coreinit::InitializeMEMFrmHeap();
+	coreinit::InitializeMEMUnitHeap();
+	coreinit::InitializeMEMBlockHeap();
+	coreinit::InitializeFG();
+	coreinit::InitializeBSP();
+	coreinit::InitializeMCP();
+	coreinit::InitializeOverlayArena();
+	coreinit::InitializeDynLoad();
+	coreinit::InitializeGHS();
+	coreinit::InitializeHWInterface();
+	coreinit::InitializeAtomic();
+	coreinit::InitializeMemory();
+	coreinit::InitializeIM();
+	coreinit::InitializeLC();
+	coreinit::InitializeMP();
+	coreinit::InitializeTimeAndCalendar();
+	coreinit::InitializeAlarm();
+	coreinit::InitializeFS();
+	coreinit::InitializeSystemInfo();
+	coreinit::InitializeConcurrency();
+	coreinit::InitializeSpinlock();
+	coreinit::InitializeMessageQueue();
+	coreinit::InitializeIPC();
+	coreinit::InitializeIPCBuf();
+	coreinit::InitializeMemoryMapping();
+	coreinit::InitializeCodeGen();
+	coreinit::InitializeCoroutine();
+	coreinit::InitializeOSScreen();
+	
+	// legacy mem stuff
+	coreinit::expheap_load();
 
-			// reset threads
-			activeThreadCount = 0;
-			// init submodules
-			coreinit::InitializeMEM();
-			coreinit::InitializeMEMFrmHeap();
-			coreinit::InitializeMEMUnitHeap();
-			coreinit::InitializeMEMBlockHeap();
-			coreinit::InitializeFG();
-			coreinit::InitializeBSP();
-			coreinit::InitializeMCP();
-			coreinit::InitializeOverlayArena();
-			coreinit::InitializeDynLoad();
-			coreinit::InitializeGHS();
-			coreinit::InitializeHWInterface();
-			coreinit::InitializeAtomic();
-			coreinit::InitializeMemory();
-			coreinit::InitializeIM();
-			coreinit::InitializeLC();
-			coreinit::InitializeMP();
-			coreinit::InitializeTimeAndCalendar();
-			coreinit::MapAlarmExports();
-			coreinit::InitializeFS();
-			coreinit::InitializeSystemInfo();
-			coreinit::InitializeConcurrency();
-			coreinit::InitializeSpinlock();
-			coreinit::InitializeMessageQueue();
-			coreinit::MapIPCExports();
-			coreinit::InitializeIPCBuf();
-			coreinit::InitializeMemoryMapping();
-			coreinit::InitializeCodeGen();
-			coreinit::InitializeCoroutine();
-			coreinit::InitializeOSScreen();
+	// misc exports
+	coreinit::miscInit();
+	osLib_addFunction("coreinit", "OSGetSharedData", coreinitExport_OSGetSharedData);
+	osLib_addFunction("coreinit", "UCReadSysConfig", coreinitExport_UCReadSysConfig);
 
-			// legacy mem stuff
-			coreinit::expheap_load();
-
-			// misc exports
-			coreinit::miscInit();
-			osLib_addFunction("coreinit", "OSGetSharedData", coreinitExport_OSGetSharedData);
-			osLib_addFunction("coreinit", "UCReadSysConfig", coreinitExport_UCReadSysConfig);
-		};
-
-		void RPLUnmapped() override
-		{
-			ResetAsyncCallback();
-			ResetFS();
-			g_coreinitStaticData.Deallocate();
-		}
-
-		void rpl_entry(uint32 moduleHandle, coreinit::RplEntryReason reason) override
-		{
-			if (reason == coreinit::RplEntryReason::Loaded)
-			{
-				coreinit::InitializeThread();
-				coreinit::InitializeAlarm();
-				coreinit::InitializeIPC();
-				InitializeAsyncCallback();
-				// remaining coreinit initialization happens in coreinit_start and requires a valid PPC context
-				OSThread_t* initialThread = coreinit::OSGetDefaultThread(1);
-				coreinit::OSSetThreadPriority(initialThread, 16);
-				coreinit::OSRunThread(initialThread, PPCInterpreter_makeCallableExportDepr(coreinit_start), 0, nullptr);
-			}
-			else if (reason == coreinit::RplEntryReason::Unloaded)
-			{
-				// todo
-			}
-		}
-	}s_COSCoreinitModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSCoreinitModule;
-	}
+	// async callbacks
+	InitializeAsyncCallback();
 }

@@ -5,11 +5,9 @@
 #include "Cafe/OS/libs/coreinit/coreinit_Alarm.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Time.h"
 #include "Cafe/HW/Espresso/PPCCallback.h"
-#include "Common/CafeStaticVar.h"
 
 namespace camera
 {
-	constinit COSStaticData s_camStaticData;
 
 	struct CAMInitInfo_t
 	{
@@ -60,8 +58,8 @@ namespace camera
 	std::vector<struct CameraInstance*> g_activeCameraInstances;
 	std::recursive_mutex g_mutex_camera;
 	std::atomic_int g_cameraCounter{ 0 };
-	CafeStaticVar<coreinit::OSAlarm_t, 1> g_alarm_camera{s_camStaticData};
-	CafeStaticVar<CAMCallbackParam, 1> g_cameraHandlerParam{s_camStaticData};
+	SysAllocator<coreinit::OSAlarm_t, 1> g_alarm_camera;
+	SysAllocator<CAMCallbackParam, 1> g_cameraHandlerParam;
 
 	CameraInstance* GetCameraInstanceByHandle(sint32 camHandle)
 	{
@@ -244,48 +242,16 @@ namespace camera
 		g_cameraCounter = 0;
 	}
 
-	class : public COSModule
+	void load()
 	{
-		public:
-		std::string_view GetName() override
-		{
-			return "camera";
-		}
-
-		void RPLUnmapped() override
-		{
-			coreinit::OSCancelAlarm(g_alarm_camera.GetPtr());
-			s_camStaticData.Deallocate();
-		}
-
-		void RPLMapped() override
-		{
-			s_camStaticData.Allocate();
-			cafeExportRegister("camera", CAMGetMemReq, LogType::Placeholder);
-			cafeExportRegister("camera", CAMCheckMemSegmentation, LogType::Placeholder);
-			cafeExportRegister("camera", CAMInit, LogType::Placeholder);
-			cafeExportRegister("camera", CAMExit, LogType::Placeholder);
-			cafeExportRegister("camera", CAMOpen, LogType::Placeholder);
-			cafeExportRegister("camera", CAMClose, LogType::Placeholder);
-			cafeExportRegister("camera", CAMSubmitTargetSurface, LogType::Placeholder);
-		};
-
-		void rpl_entry(uint32 moduleHandle, coreinit::RplEntryReason reason) override
-		{
-			if (reason == coreinit::RplEntryReason::Loaded)
-			{
-				reset();
-			}
-			else if (reason == coreinit::RplEntryReason::Unloaded)
-			{
-				// todo
-			}
-		}
-	}s_COScameraModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COScameraModule;
+		reset();
+		cafeExportRegister("camera", CAMGetMemReq, LogType::Placeholder);
+		cafeExportRegister("camera", CAMCheckMemSegmentation, LogType::Placeholder);
+		cafeExportRegister("camera", CAMInit, LogType::Placeholder);
+		cafeExportRegister("camera", CAMExit, LogType::Placeholder);
+		cafeExportRegister("camera", CAMOpen, LogType::Placeholder);
+		cafeExportRegister("camera", CAMClose, LogType::Placeholder);
+		cafeExportRegister("camera", CAMSubmitTargetSurface, LogType::Placeholder);
 	}
 }
 

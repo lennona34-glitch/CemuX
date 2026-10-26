@@ -19,8 +19,6 @@ uint32 RendererShader::GeneratePrecompiledCacheId()
 	// settings that can influence shaders
 	v += (uint32)g_current_game_profile->GetAccurateShaderMul() * 133;
 
-	v += 0x820a5291; // change this value for manual invalidation
-
 	return v;
 }
 

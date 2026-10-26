@@ -5,6 +5,7 @@
 #include "Cafe/OS/libs/coreinit/coreinit_CodeGen.h"
 
 #include "../Recompiler/PPCRecompiler.h"
+#include "../Recompiler/PPCRecompilerX64.h"
 
 #include <float.h>
 #include "Cafe/HW/Latte/Core/LatteBufferCache.h"
@@ -93,6 +94,7 @@ void PPCInterpreter_MTCRF(PPCInterpreter_t* hCPU, uint32 Opcode)
 {
 	// frequently used by GCC compiled code (e.g. SM64 port)
 	// tested
+
 	uint32 rS;
 	uint32 crfMask;
 	PPC_OPC_TEMPL_XFX(Opcode, rS, crfMask);

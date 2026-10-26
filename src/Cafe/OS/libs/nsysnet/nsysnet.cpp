@@ -8,8 +8,23 @@
 #include "Common/socket.h"
 
 #if BOOST_OS_UNIX
-#include <netinet/tcp.h>
-#endif
+
+#define WSAEWOULDBLOCK EWOULDBLOCK
+#define WSAEINPROGRESS EINPROGRESS
+#define WSAESHUTDOWN ESHUTDOWN
+#define WSAECONNABORTED ECONNABORTED
+#define WSAHOST_NOT_FOUND EAI_NONAME
+#define WSAENOTCONN ENOTCONN
+
+#define GETLASTERR errno
+
+#endif // BOOST_OS_UNIX
+
+#if BOOST_OS_WINDOWS
+
+#define GETLASTERR WSAGetLastError()
+
+#endif //BOOST_OS_WINDOWS
 
 #define WU_AF_INET			2
 
@@ -79,7 +94,6 @@
 
 #define WU_SO_ESHUTDOWN		0x000F
 
-constinit COSStaticData s_nsysnetData;
 
 typedef signed int WUSOCKET;
 
@@ -87,24 +101,20 @@ bool sockLibReady = false;
 
 void nsysnetExport_socket_lib_init(PPCInterpreter_t* hCPU)
 {
-#if BOOST_OS_WINDOWS
-	if (!sockLibReady)
-	{
-		WSADATA wsa;
-		WSAStartup(MAKEWORD(2, 2), &wsa);
-	}
-#endif // BOOST_OS_WINDOWS
 	sockLibReady = true;
+#if BOOST_OS_WINDOWS
+	WSADATA wsa;
+	WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif // BOOST_OS_WINDOWS
 	osLib_returnFromFunction(hCPU, 0); // 0 -> Success
 }
 
 void nsysnetExport_socket_lib_finish(PPCInterpreter_t* hCPU)
 {
-#if BOOST_OS_WINDOWS
-	if (sockLibReady)
-		WSACleanup();
-#endif // BOOST_OS_WINDOWS
 	sockLibReady = false;
+#if BOOST_OS_WINDOWS
+	WSACleanup();
+#endif // BOOST_OS_WINDOWS
 	osLib_returnFromFunction(hCPU, 0); // 0 -> Success
 }
 
@@ -194,7 +204,6 @@ typedef struct
 	sint32 protocol;
 	// host side info
 	SOCKET s;
-	bool isExternal;
 	// socket options
 	bool isNonBlocking;
 }virtualSocket_t;
@@ -281,10 +290,11 @@ WUSOCKET nsysnet_createVirtualSocket(sint32 family, sint32 type, sint32 protocol
 	return vs->handle;
 }
 
-WUSOCKET nsysnet_createVirtualSocketFromExistingSocket(SOCKET existingSocket, bool isExternal)
+WUSOCKET nsysnet_createVirtualSocketFromExistingSocket(SOCKET existingSocket)
 {
-	if (isExternal)
-		cemuLog_logDebug(LogType::Force, "nsysnet_createVirtualSocketFromExistingSocket - incomplete");
+	cemuLog_logDebug(LogType::Force, "nsysnet_createVirtualSocketFromExistingSocket - incomplete");
+
+
 	sint32 s = _getFreeSocketHandle();
 	if (s == 0)
 	{
@@ -324,7 +334,6 @@ WUSOCKET nsysnet_createVirtualSocketFromExistingSocket(SOCKET existingSocket, bo
 	vs->handle = s;
 	virtualSocketTable[s - 1] = vs;
 	vs->s = existingSocket;
-	vs->isExternal = isExternal;
 	return vs->handle;
 }
 
@@ -910,12 +919,12 @@ void nsysnetExport_accept(PPCInterpreter_t* hCPU)
 	virtualSocket_t* vs = nsysnet_getVirtualSocketObject(s);
 	if (vs == NULL)
 	{
-		_setSockError(WU_SO_EINVAL);
-		osLib_returnFromFunction(hCPU, -1);
+		assert_dbg();
+		// todo
 		return;
 	}
 
-	if (lenMPTR && memory_readU32(lenMPTR) != 16)
+	if (memory_readU32(lenMPTR) != 16)
 	{
 		cemuLog_log(LogType::Force, "invalid sockaddr len in accept()");
 		cemu_assert_debug(false);
@@ -923,45 +932,28 @@ void nsysnetExport_accept(PPCInterpreter_t* hCPU)
 		return;
 	}
 
-	bool isNonBlocking = vs->isNonBlocking;
-	SOCKET hostSocket = vs->s;
-	while (true)
+	if (vs->isNonBlocking)
 	{
-		if (!isNonBlocking && _socket_nonblock(hostSocket, 1) == SOCKET_ERROR)
-		{
-			r = _translateError(-1, GETLASTERR, _ERROR_MODE_ACCEPT);
-			break;
-		}
 		sockaddr hostAddr;
 		socklen_t hostLen = sizeof(sockaddr);
-		SOCKET hr = accept(hostSocket, &hostAddr, &hostLen);
+		SOCKET hr = accept(vs->s, &hostAddr, &hostLen);
 		if (hr != SOCKET_ERROR)
 		{
-			if (!isNonBlocking)
-				_socket_nonblock(hr, 0);
 			r = nsysnet_createVirtualSocketFromExistingSocket(hr);
 			_setSockError(WU_SO_SUCCESS);
-			if (addr)
-				sockaddr_host2guest(&hostAddr, addr);
-			break;
 		}
-		sint32 hostError = GETLASTERR;
-		if (isNonBlocking || hostError != WSAEWOULDBLOCK)
+		else
 		{
-			r = _translateError(-1, hostError, _ERROR_MODE_ACCEPT);
-			break;
+			r = _translateError((sint32)hr, (sint32)GETLASTERR, _ERROR_MODE_ACCEPT);
 		}
-		coreinit::OSSleepTicks(coreinit::EspressoTime::GetTimerClock() / 10); // sleep 100ms
-		vs = nsysnet_getVirtualSocketObject(s);
-		if (!vs || vs->s != hostSocket)
-		{
-			_setSockError(WU_SO_EINVAL);
-			r = -1;
-			break;
-		}
+		sockaddr_host2guest(&hostAddr, addr);
 	}
-	if (!isNonBlocking && vs && vs->s == hostSocket)
-		_socket_nonblock(hostSocket, vs->isNonBlocking);
+	else
+	{
+		// blocking accept is not supported yet
+		cemuLog_log(LogType::Force, "blocking accept() not supported");
+		cemu_assert_debug(false);
+	}
 
 	osLib_returnFromFunction(hCPU, r);
 }
@@ -1263,7 +1255,7 @@ void nsysnetExport_select(PPCInterpreter_t* hCPU)
 				break;
 			}
 			// yield thread
-			coreinit::OSSleepTicks(coreinit::EspressoTime::ConvertNsToTimerTicks(300000)); // sleep 0.3ms so we don't end up with a case where a single select loop starves all other CPU threads (seen in Just Dance 2018)
+			PPCCore_switchToScheduler();
 		}
 		else
 		{
@@ -1408,10 +1400,10 @@ void nsysnetExport_gethostbyname(PPCInterpreter_t* hCPU)
 	return;
 }
 
-CafeStaticVar<wu_hostent> _staticHostent{s_nsysnetData};
-CafeStaticVar<char, 256> _staticHostentName{s_nsysnetData};
-CafeStaticVar<MPTR, 32> _staticHostentPtrList{s_nsysnetData};
-CafeStaticVar<wu_in_addr, 32> _staticHostentEntries{s_nsysnetData};
+SysAllocator<wu_hostent> _staticHostent;
+SysAllocator<char, 256> _staticHostentName;
+SysAllocator<MPTR, 32> _staticHostentPtrList;
+SysAllocator<wu_in_addr> _staticHostentEntries;
 
 void nsysnetExport_gethostbyaddr(PPCInterpreter_t* hCPU)
 {
@@ -2022,7 +2014,6 @@ void nsysnetExport_sendto_multi_ex(PPCInterpreter_t* hCPU)
 namespace nsysnet
 {
 	std::vector<NSSLInternalState_t> g_nsslInternalStates;
-	std::mutex s_nsslContextMutex;
 
 	NSSLInternalState_t* GetNSSLContext(sint32 index)
 	{
@@ -2038,7 +2029,6 @@ namespace nsysnet
 	void export_NSSLCreateContext(PPCInterpreter_t* hCPU)
 	{
 		ppcDefineParamU32(version, 0);
-		std::lock_guard lock(s_nsslContextMutex);
 
 		NSSLInternalState_t ssl = {};
 		ssl.sslVersion = version;
@@ -2056,7 +2046,6 @@ namespace nsysnet
 		ppcDefineParamU32(nsslHandle, 0);
 		ppcDefineParamU32(clientPKI, 1);
 		cemuLog_logDebug(LogType::Force, "NSSLSetClientPKI(0x{:x}, 0x{:x})", nsslHandle, clientPKI);
-		std::lock_guard lock(s_nsslContextMutex);
 
 		if (g_nsslInternalStates.size() <= nsslHandle || g_nsslInternalStates[nsslHandle].destroyed)
 		{
@@ -2073,7 +2062,6 @@ namespace nsysnet
 		ppcDefineParamU32(nsslHandle, 0);
 		ppcDefineParamU32(serverPKI, 1);
 		cemuLog_logDebug(LogType::Force, "NSSLAddServerPKI(0x{:x}, 0x{:x})", nsslHandle, serverPKI);
-		std::lock_guard lock(s_nsslContextMutex);
 
 		if (g_nsslInternalStates.size() <= nsslHandle || g_nsslInternalStates[nsslHandle].destroyed)
 		{
@@ -2093,16 +2081,9 @@ namespace nsysnet
 		ppcDefineParamS32(certType, 3);
 
 		cemuLog_logDebug(LogType::Force, "NSSLAddServerPKIExternal(0x{:x}, 0x{:08x}, 0x{:x}, {})", nsslHandle, certData.GetMPTR(), certLen, certType);
-		std::lock_guard lock(s_nsslContextMutex);
 		if (g_nsslInternalStates.size() <= nsslHandle || g_nsslInternalStates[nsslHandle].destroyed)
 		{
 			osLib_returnFromFunction(hCPU, NSSL_INVALID_CTX);
-			return;
-		}
-
-		if (certLen <= 0 || uint64(certData.GetMPTR()) + uint32(certLen) > 0x100000000ULL)
-		{
-			osLib_returnFromFunction(hCPU, NSSL_INVALID_SIZE);
 			return;
 		}
 
@@ -2118,7 +2099,6 @@ namespace nsysnet
 		ppcDefineParamMEMPTR(validCountOut, sint32, 2);
 		ppcDefineParamMEMPTR(invalidCountOut, sint32, 3);
 		cemuLog_logDebug(LogType::Force, "NSSLAddServerPKIGroups(0x{:x}, 0x{:x}, 0x{:08x}, 0x{:08x})", nsslHandle, groupMask, validCountOut.GetMPTR(), invalidCountOut.GetMPTR());
-		std::lock_guard lock(s_nsslContextMutex);
 
 		if (g_nsslInternalStates.size() <= nsslHandle || g_nsslInternalStates[nsslHandle].destroyed)
 		{
@@ -2153,7 +2133,6 @@ namespace nsysnet
 	{
 		ppcDefineParamU32(nsslHandle, 0);
 		cemuLog_logDebug(LogType::Force, "NSSLDestroyContext(0x{:x})", nsslHandle);
-		std::lock_guard lock(s_nsslContextMutex);
 
 		if (g_nsslInternalStates.size() <= nsslHandle || g_nsslInternalStates[nsslHandle].destroyed)
 		{
@@ -2238,101 +2217,69 @@ namespace nsysnet
 
 namespace nsysnet
 {
+    void Initialize()
+    {
+        cafeExportRegister("nsysnet", inet_ntop, LogType::Socket);
+    }
+}
 
-	class : public COSModule
-	{
-		public:
-		std::string_view GetName() override
-		{
-			return "nsysnet";
-		}
+// register nsysnet functions
+void nsysnet_load()
+{
+    nsysnet::Initialize();
 
-		void RPLUnmapped() override
-		{
-			for (auto& socket : virtualSocketTable)
-			{
-				if (!socket)
-					continue;
-				if (!socket->isExternal)
-					closesocket(socket->s);
-				free(socket);
-				socket = nullptr;
-			}
-			{
-				std::lock_guard lock(s_nsslContextMutex);
-				g_nsslInternalStates.clear();
-			}
-#if BOOST_OS_WINDOWS
-			if (sockLibReady)
-				WSACleanup();
-#endif
-			s_nsysnetData.Deallocate();
-		}
+    // the below code is the old way of registering API which is deprecated
 
-		void RPLMapped() override
-		{
-			sockLibReady = false;
-			s_nsysnetData.Allocate();
-			cafeExportRegister("nsysnet", inet_ntop, LogType::Socket);
+    osLib_addFunction("nsysnet", "socket_lib_init", nsysnetExport_socket_lib_init);
+	osLib_addFunction("nsysnet", "socket_lib_finish", nsysnetExport_socket_lib_finish);
+	
+	// socket API
+	osLib_addFunction("nsysnet", "socket", nsysnetExport_socket);
+	osLib_addFunction("nsysnet", "mw_socket", nsysnetExport_mw_socket);
+	osLib_addFunction("nsysnet", "shutdown", nsysnetExport_shutdown);
+	osLib_addFunction("nsysnet", "socketclose", nsysnetExport_socketclose);
+	osLib_addFunction("nsysnet", "setsockopt", nsysnetExport_setsockopt);
+	osLib_addFunction("nsysnet", "getsockopt", nsysnetExport_getsockopt);
+	osLib_addFunction("nsysnet", "bind", nsysnetExport_bind);
+	osLib_addFunction("nsysnet", "listen", nsysnetExport_listen);
+	osLib_addFunction("nsysnet", "accept", nsysnetExport_accept);
+	osLib_addFunction("nsysnet", "connect", nsysnetExport_connect);
+	osLib_addFunction("nsysnet", "send", nsysnetExport_send);
+	osLib_addFunction("nsysnet", "recv", nsysnetExport_recv);
+	osLib_addFunction("nsysnet", "select", nsysnetExport_select);
+	osLib_addFunction("nsysnet", "getsockname", nsysnetExport_getsockname);
+	osLib_addFunction("nsysnet", "getpeername", nsysnetExport_getpeername);
 
-		    // the below code is the old way of registering API which is deprecated
+	osLib_addFunction("nsysnet", "inet_aton", nsysnetExport_inet_aton);
+	osLib_addFunction("nsysnet", "inet_pton", nsysnetExport_inet_pton);
+	osLib_addFunction("nsysnet", "inet_ntoa", nsysnetExport_inet_ntoa);
+	osLib_addFunction("nsysnet", "htons", nsysnetExport_htons);
+	osLib_addFunction("nsysnet", "htonl", nsysnetExport_htonl);
+	osLib_addFunction("nsysnet", "ntohs", nsysnetExport_ntohs);
+	osLib_addFunction("nsysnet", "ntohl", nsysnetExport_ntohl);
+	osLib_addFunction("nsysnet", "gethostbyname", nsysnetExport_gethostbyname);
+	osLib_addFunction("nsysnet", "gethostbyaddr", nsysnetExport_gethostbyaddr);
+	osLib_addFunction("nsysnet", "getaddrinfo", nsysnetExport_getaddrinfo);
 
-		    osLib_addFunction("nsysnet", "socket_lib_init", nsysnetExport_socket_lib_init);
-			osLib_addFunction("nsysnet", "socket_lib_finish", nsysnetExport_socket_lib_finish);
+	osLib_addFunction("nsysnet", "socketlasterr", nsysnetExport_socketlasterr);
 
-			// socket API
-			osLib_addFunction("nsysnet", "socket", nsysnetExport_socket);
-			osLib_addFunction("nsysnet", "mw_socket", nsysnetExport_mw_socket);
-			osLib_addFunction("nsysnet", "shutdown", nsysnetExport_shutdown);
-			osLib_addFunction("nsysnet", "socketclose", nsysnetExport_socketclose);
-			osLib_addFunction("nsysnet", "setsockopt", nsysnetExport_setsockopt);
-			osLib_addFunction("nsysnet", "getsockopt", nsysnetExport_getsockopt);
-			osLib_addFunction("nsysnet", "bind", nsysnetExport_bind);
-			osLib_addFunction("nsysnet", "listen", nsysnetExport_listen);
-			osLib_addFunction("nsysnet", "accept", nsysnetExport_accept);
-			osLib_addFunction("nsysnet", "connect", nsysnetExport_connect);
-			osLib_addFunction("nsysnet", "send", nsysnetExport_send);
-			osLib_addFunction("nsysnet", "recv", nsysnetExport_recv);
-			osLib_addFunction("nsysnet", "select", nsysnetExport_select);
-			osLib_addFunction("nsysnet", "getsockname", nsysnetExport_getsockname);
-			osLib_addFunction("nsysnet", "getpeername", nsysnetExport_getpeername);
+	// unfinished implementations
+	osLib_addFunction("nsysnet", "recvfrom", nsysnetExport_recvfrom);
+	osLib_addFunction("nsysnet", "recvfrom_ex", nsysnetExport_recvfrom_ex);
+	osLib_addFunction("nsysnet", "sendto", nsysnetExport_sendto);
 
-			osLib_addFunction("nsysnet", "inet_aton", nsysnetExport_inet_aton);
-			osLib_addFunction("nsysnet", "inet_pton", nsysnetExport_inet_pton);
-			osLib_addFunction("nsysnet", "inet_ntoa", nsysnetExport_inet_ntoa);
-			osLib_addFunction("nsysnet", "htons", nsysnetExport_htons);
-			osLib_addFunction("nsysnet", "htonl", nsysnetExport_htonl);
-			osLib_addFunction("nsysnet", "ntohs", nsysnetExport_ntohs);
-			osLib_addFunction("nsysnet", "ntohl", nsysnetExport_ntohl);
-			osLib_addFunction("nsysnet", "gethostbyname", nsysnetExport_gethostbyname);
-			osLib_addFunction("nsysnet", "gethostbyaddr", nsysnetExport_gethostbyaddr);
-			osLib_addFunction("nsysnet", "getaddrinfo", nsysnetExport_getaddrinfo);
+	osLib_addFunction("nsysnet", "sendto_multi", nsysnetExport_sendto_multi);
+	osLib_addFunction("nsysnet", "sendto_multi_ex", nsysnetExport_sendto_multi_ex);
 
-			osLib_addFunction("nsysnet", "socketlasterr", nsysnetExport_socketlasterr);
 
-			// unfinished implementations
-			osLib_addFunction("nsysnet", "recvfrom", nsysnetExport_recvfrom);
-			osLib_addFunction("nsysnet", "recvfrom_ex", nsysnetExport_recvfrom_ex);
-			osLib_addFunction("nsysnet", "sendto", nsysnetExport_sendto);
+	// NSSL API
+	osLib_addFunction("nsysnet", "NSSLCreateContext", nsysnet::export_NSSLCreateContext);
+	osLib_addFunction("nsysnet", "NSSLSetClientPKI", nsysnet::export_NSSLSetClientPKI);
+	osLib_addFunction("nsysnet", "NSSLAddServerPKI", nsysnet::export_NSSLAddServerPKI);
+	osLib_addFunction("nsysnet", "NSSLAddServerPKIExternal", nsysnet::export_NSSLAddServerPKIExternal);
+	osLib_addFunction("nsysnet", "NSSLAddServerPKIGroups", nsysnet::export_NSSLAddServerPKIGroups);
+	osLib_addFunction("nsysnet", "NSSLDestroyContext", nsysnet::export_NSSLDestroyContext);
 
-			osLib_addFunction("nsysnet", "sendto_multi", nsysnetExport_sendto_multi);
-			osLib_addFunction("nsysnet", "sendto_multi_ex", nsysnetExport_sendto_multi_ex);
-
-			// NSSL API
-			osLib_addFunction("nsysnet", "NSSLCreateContext", nsysnet::export_NSSLCreateContext);
-			osLib_addFunction("nsysnet", "NSSLSetClientPKI", nsysnet::export_NSSLSetClientPKI);
-			osLib_addFunction("nsysnet", "NSSLAddServerPKI", nsysnet::export_NSSLAddServerPKI);
-			osLib_addFunction("nsysnet", "NSSLAddServerPKIExternal", nsysnet::export_NSSLAddServerPKIExternal);
-			osLib_addFunction("nsysnet", "NSSLAddServerPKIGroups", nsysnet::export_NSSLAddServerPKIGroups);
-			osLib_addFunction("nsysnet", "NSSLDestroyContext", nsysnet::export_NSSLDestroyContext);
-
-			osLib_addFunction("nsysnet", "NSSLExportInternalServerCertificate", nsysnet::export_NSSLExportInternalServerCertificate);
-			osLib_addFunction("nsysnet", "NSSLExportInternalClientCertificate", nsysnet::export_NSSLExportInternalClientCertificate);
-		};
-	}s_COSnsysnetModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSnsysnetModule;
-	}
+	osLib_addFunction("nsysnet", "NSSLExportInternalServerCertificate", nsysnet::export_NSSLExportInternalServerCertificate);
+	osLib_addFunction("nsysnet", "NSSLExportInternalClientCertificate", nsysnet::export_NSSLExportInternalClientCertificate);
 }

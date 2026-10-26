@@ -1,14 +1,10 @@
 #include "Cafe/GameProfile/GameProfile.h"
 #include "Cafe/IOSU/legacy/iosu_crypto.h"
-#include "Cafe/HW/Latte/Core/Latte.h"
-#ifdef ENABLE_VULKAN
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanAPI.h"
-#endif
 #include "Cafe/CafeSystem.h"
 #include "Cemu/Logging/CemuLogging.h"
 #include "config/ActiveSettings.h"
 #include "config/LaunchSettings.h"
-#include "Cafe/Account/Account.h"
 #include "util/helpers/helpers.h"
 
 void ActiveSettings::SetPaths(bool isPortableMode,
@@ -64,6 +60,14 @@ bool ActiveSettings::DisplayDRCEnabled()
 	return g_current_game_profile->StartWithGamepadView();
 }
 
+bool ActiveSettings::FullscreenEnabled()
+{
+	if (LaunchSettings::FullscreenEnabled().has_value())
+		return LaunchSettings::FullscreenEnabled().value();
+
+	return GetConfig().fullscreen;
+}
+
 CPUMode ActiveSettings::GetCPUMode()
 {
 	auto mode = g_current_game_profile->GetCPUMode().value_or(CPUMode::Auto);
@@ -108,40 +112,12 @@ bool ActiveSettings::WaitForGX2DrawDoneEnabled()
 
 GraphicAPI ActiveSettings::GetGraphicsAPI()
 {
-	const GraphicAPI api = g_current_game_profile->GetGraphicsAPI().value_or(GetConfig().graphic_api);
-	std::optional<GraphicAPI> fallbackAPI;
-#ifdef ENABLE_VULKAN
-	if (g_vulkan_available)
-	{
-		if (api == kVulkan)
-			return api;
-		fallbackAPI = kVulkan;
-	}
-#endif
-#ifdef ENABLE_METAL
-	if (api == kMetal)
-		return api;
-	fallbackAPI = fallbackAPI.value_or(kMetal);
-#endif
-#ifdef ENABLE_OPENGL
-	if (api == kOpenGL)
-		return api;
-	fallbackAPI = fallbackAPI.value_or(kOpenGL);
-#endif
-	cemu_assert(fallbackAPI.has_value());
-	return *fallbackAPI;
-}
-
-float ActiveSettings::GetTVGamma()
-{
-	const auto& config = GetConfig();
-	return config.overrideGammaValue.GetValue() + LatteGPUState.tvGamma * !config.overrideAppGammaPreference.GetValue();
-}
-
-float ActiveSettings::GetDRCGamma()
-{
-	const auto& config = GetConfig();
-	return config.overrideGammaValue.GetValue() + LatteGPUState.drcGamma * !config.overrideAppGammaPreference.GetValue();
+	GraphicAPI api = g_current_game_profile->GetGraphicsAPI().value_or(GetConfig().graphic_api);
+	// check if vulkan even available
+	if (api == kVulkan && !g_vulkan_available)
+		api = kOpenGL;
+	
+	return api;
 }
 
 bool ActiveSettings::AudioOutputOnlyAux()
@@ -189,11 +165,6 @@ bool ActiveSettings::DumpTexturesEnabled()
 	return s_dump_textures;
 }
 
-bool ActiveSettings::DumpRecompilerFunctionsEnabled()
-{
-	return s_dump_recompiler_functions;
-}
-
 bool ActiveSettings::DumpLibcurlRequestsEnabled()
 {
 	return s_dump_libcurl_requests;
@@ -207,11 +178,6 @@ void ActiveSettings::EnableDumpShaders(bool state)
 void ActiveSettings::EnableDumpTextures(bool state)
 {
 	s_dump_textures = state;
-}
-
-void ActiveSettings::EnableDumpRecompilerFunctions(bool state)
-{
-	s_dump_recompiler_functions = state;
 }
 
 void ActiveSettings::EnableDumpLibcurlRequests(bool state)

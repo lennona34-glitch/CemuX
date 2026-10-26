@@ -41,7 +41,7 @@ void GraphicPack2::CancelParsingPatches()
 
 void GraphicPack2::AddPatchGroup(PatchGroup* group)
 {
-	if (group->list_moduleMatches.empty() && !group->m_isRpxOnlyTarget)
+	if (group->list_moduleMatches.empty())
 	{
 		LogPatchesSyntaxError(-1, fmt::format("Group \"{}\" has no moduleMatches definition", group->name));
 		CancelParsingPatches();
@@ -56,9 +56,9 @@ void GraphicPack2::AddPatchGroup(PatchGroup* group)
 		if (patchData)
 		{
 			uint32 patchAddr = patchData->getAddr();
-			if (patchAddr < PatchGroup::CODECAVE_MAX_OFFSET)
+			if (patchAddr < 0x00100000)
 			{
-				// everything that gets relocated relative to the code cave needs to be part of it
+				// everything in low 1MB of memory we consider part of the code cave
 				codeCaveMaxAddr = std::max(codeCaveMaxAddr, patchAddr + patchData->getSize());
 			}
 		}
@@ -347,12 +347,6 @@ bool GraphicPack2::ParseCemuPatchesTxtInternal(MemStreamReader& patchesStream)
 			// read the checksums
 			while (true)
 			{
-                if (parser.matchWordI("rpx"))
-                {
-                   	currentGroup->m_isRpxOnlyTarget = true;
-                   	break;
-                }
-			
 				uint32 checksum = 0;
 				if (parser.parseU32(checksum) == false)
 				{
@@ -431,32 +425,7 @@ bool GraphicPack2::ParseCemuPatchesTxtInternal(MemStreamReader& patchesStream)
 			}
 			continue;
 		}
-		else if (parser.matchWordI(".callback"))
-		{
-		    if (parser.matchWordI("entry"))
-    		{
-                const char* symbolStr;
-    			sint32 symbolLen;
-    		    if (parser.parseSymbolName(symbolStr, symbolLen))
-    		    {
-    				currentGroup->list_callbacks.push_back(std::make_pair(std::string(symbolStr, static_cast<size_t>(symbolLen)), GPCallbackType::Entry));
-    				continue;
-    		    }
-    		    else
-    		    {
-                    LogPatchesSyntaxError(lineNumber, "'.callback' must reference a symbol after the type");
-                    CancelParsingPatches();
-                    return false;
-    		    }
-    		}
-		    else
-		    {
-				LogPatchesSyntaxError(lineNumber, "Unrecognized type for '.callback'");
-				CancelParsingPatches();
-				return false;
-			}
-		}
-
+		
 		// next we attempt to parse symbol assignment
 		// symbols can be labels or variables. The type is determined by what comes after the symbol name
 		// <symbolName> = <expression> defines a variable

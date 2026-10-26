@@ -17,12 +17,9 @@
          - [Building Errors](#building-errors)
 - [macOS](#macos)
    - [Installing brew](#installing-brew)
-   - [Dependencies](#dependencies-1)
-   - [MoltenVK](#moltenvk)
+   - [Installing Tool Dependencies](#installing-tool-dependencies)
+   - [Installing Library Dependencies](#installing-library-dependencies)
    - [Build Cemu using CMake](#build-cemu-using-cmake)
-- [FreeBSD](#freebsd)
-	- [Installing Dependencies](#installing-dependencies)
-	- [Build Cemu on BSD with CMake](#build-cemu-on-bsd-with-cmake)
 - [Updating Cemu and source code](#updating-cemu-and-source-code)
 
 ## Windows
@@ -49,14 +46,14 @@ To compile Cemu, a recent enough compiler and STL with C++20 support is required
 ### Dependencies
 
 #### For Arch and derivatives:
-`sudo pacman -S --needed base-devel bluez-libs clang cmake freeglut git glm gtk3 libgcrypt libpulse libsecret linux-headers llvm nasm ninja systemd unzip zip wayland-protocols`
+`sudo pacman -S --needed base-devel bluez-libs clang cmake freeglut git glm gtk3 libgcrypt libpulse libsecret linux-headers llvm nasm ninja systemd unzip zip`
 
 #### For Debian, Ubuntu and derivatives:
 `sudo apt install -y cmake curl clang-15 freeglut3-dev git libbluetooth-dev libgcrypt20-dev libglm-dev libgtk-3-dev libpulse-dev libsecret-1-dev libsystemd-dev libtool nasm ninja-build`
 
 You may also need to install `libusb-1.0-0-dev` as a workaround for an issue with the vcpkg hidapi package.
 
-At Step 3 in [Build Cemu using CMake and Clang](#cmake-and-clang), use the following command instead:
+At Step 3 in [Build Cemu using cmake and clang](#build-cemu-using-cmake-and-clang), use the following command instead:
    `cmake -S . -B build -DCMAKE_BUILD_TYPE=release -DCMAKE_C_COMPILER=/usr/bin/clang-15 -DCMAKE_CXX_COMPILER=/usr/bin/clang++-15 -G Ninja -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja`
 
 #### For Fedora and derivatives:
@@ -109,7 +106,7 @@ This section refers to running `cmake -S...` (truncated).
       * `cd dependencies/vcpkg && git fetch --unshallow`
 * `Please ensure you're using the latest port files with git pull and vcpkg update.`
    * Either:
-      * Update vcpkg by running the following command:
+      * Update vcpkg by running by the following command:
          * `git submodule update --remote dependencies/vcpkg`
       * If you are sure vcpkg is up to date, check the following logs:
          * `Cemu/dependencies/vcpkg/buildtrees/wxwidgets/config-x64-linux-out.log`
@@ -119,12 +116,12 @@ This section refers to running `cmake -S...` (truncated).
    * Add the following and try running the command again:
       * `-DCMAKE_MAKE_PROGRAM=/usr/bin/ninja`
 * Compiling failed during the boost-build dependency.
-   * It means you don't have a working/good standard library installation. Check the integrity of your system headers and make sure that C++ related packages are installed and intact.
+   * It means you don't have a working/good standard library installation. Check the integrity of your system headers and making sure that C++ related packages are installed and intact.
 * Compiling failed during rebuild after `git pull` with an error that mentions RPATH
    * Add the following and try running the command again:
       * `-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON`
 * Environment variable `VCPKG_FORCE_SYSTEM_BINARIES` must be set.
-   * Execute the following and then try running the command again:
+   * Execute the folowing and then try running the command again:
       * `export VCPKG_FORCE_SYSTEM_BINARIES=1`
 * If you are getting a random error, read the [package-name-and-platform]-out.log and [package-name-and-platform]-err.log for the actual reason to see if you might be lacking the headers from a dependency.
 
@@ -139,9 +136,9 @@ This section refers to running `cmake --build build`.
 * `main.cpp.o: in function 'std::__cxx11::basic_string...`
    * You likely are experiencing a clang-14 issue. This can only be fixed by either lowering the clang version or using GCC, see [GCC](#gcc).
 * `fatal error: 'span' file not found`
-   *  You're either missing `libstdc++` or are using a version that's too old. Install at least v10 with your package manager, e.g. `sudo apt install libstdc++-10-dev`. See [#644](https://github.com/cemu-project/Cemu/issues/644).
+   *  You're either missing `libstdc++` or are using a version that's too old. Install at least v10 with your package manager, eg `sudo apt install libstdc++-10-dev`. See [#644](https://github.com/cemu-project/Cemu/issues/644).
 * `undefined libdecor_xx`
-   * You are likely experiencing an issue with the sdl2 package that comes with vcpkg. Delete sdl2 from vcpkg.json in source file and recompile.
+   * You are likely experiencing an issue with sdl2 package that comes with vcpkg. Delete sdl2 from vcpkg.json in source file and recompile.
 
 If you are getting a different error than any of the errors listed above, you may either open an issue in this repo or try using [GCC](#gcc). Make sure your standard library and compilers are updated since Cemu uses a lot of modern features!
 
@@ -149,84 +146,47 @@ If you are getting a different error than any of the errors listed above, you ma
 
 To compile Cemu, a recent enough compiler and STL with C++20 support is required! LLVM 13 and below
 don't support the C++20 feature set required, so either install LLVM from Homebrew or make sure that
-you have a recent enough version of Xcode. Xcode 15 is known to work.
+you have a recent enough version of Xcode. Xcode 15 is known to work. The OpenGL graphics API isn't
+supported on macOS, so Vulkan must be used through the Molten-VK compatibility layer.
 
 ### Installing brew
 
-To install the dependencies required to build Cemu, you will need to install Homebrew package manager first. You can do this by running the following command in your terminal:
-
 1. `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
 2. Set up the Homebrew shell environment:
-   - **On an Apple Silicon Mac:** eval `"$(/opt/homebrew/bin/brew shellenv)"`
-   - **On an Intel Mac:** `eval "$(/usr/local/Homebrew/bin/brew shellenv)"`
+   1. **On an Intel Mac:** `eval "$(/usr/local/Homebrew/bin/brew shellenv)"`
+   2. **On an Apple Silicon Mac:** eval `"$(/opt/homebrew/bin/brew shellenv)"`
 
-### Dependencies
+### Installing Tool Dependencies
 
-The following dependencies are required. You can install them using Homebrew with the following command:
+The native versions of these can be used regardless of what type of Mac you have.
 
-`brew install automake boost cmake git libtool nasm ninja pkgconf`
+`brew install git cmake ninja nasm automake libtool`
 
-### MoltenVK
+### Installing Library Dependencies
 
-Cemu uses the MoltenVK library to provide Vulkan support on macOS. While available on Brew, Cemu requires the "privateapi" version of MoltenVK, which is not available on Brew. To install the required version, follow the instructions below:
+**On Apple Silicon Macs, Rosetta 2 and the x86_64 version of Homebrew must be used to install these dependencies:**
+1. `softwareupdate --install-rosetta` # Install Rosetta 2 if you don't have it. This only has to be done once
+2. `arch -x86_64 zsh` # run an x64 shell
+3. `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+4. `eval "$(/usr/local/Homebrew/bin/brew shellenv)"`
 
-1. `curl -L -O https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.1/MoltenVK-macos-privateapi.tar`
-1. `tar xf MoltenVK-macos-privateapi.tar`
-1. Create a directory for the MoltenVK dylib if it doesn't already exist:
-   - **On an Apple Silicon Mac:** `sudo mkdir -p /opt/homebrew/lib`
-   - **On an Intel Mac:** `sudo mkdir -p /usr/local/lib/`
-1. Copy the MoltenVK dylib to your system library directory:
-   - **On an Apple Silicon Mac:** `sudo cp MoltenVK/lib/libMoltenVK.dylib /opt/homebrew/lib/`
-   - **On an Intel Mac:** `sudo cp MoltenVK/lib/libMoltenVK.dylib /usr/local/lib/`
+Then install the dependencies:
 
-Alternatively, you can use the non-privateapi version of MoltenVK, but you may encounter some rendering issues due to the lack of logicOp support. If you want to go this route, simply install MoltenVK from Brew with `brew install molten-vk` and skip the steps above.
+`brew install boost molten-vk`
 
 ### Build Cemu using CMake
 
 1. `git clone --recursive https://github.com/cemu-project/Cemu`
 2. `cd Cemu`
-3. `cmake -S . -B build -DCMAKE_BUILD_TYPE=release -G Ninja`
+3. `cmake -S . -B build -DCMAKE_BUILD_TYPE=release -DCMAKE_OSX_ARCHITECTURES=x86_64 -G Ninja`
 4. `cmake --build build`
 5. You should now have a Cemu executable file in the /bin folder, which you can run using `./bin/Cemu_release`.
 
-#### Creating an app bundle
-- If you want to create an app bundle instead of a raw executable, append the following flag to the command in step 3:
-   - `-DMACOS_BUNDLE=ON`
-
 #### Troubleshooting steps
-- If step 3 gives you an error about not being able to find ninja, try appending the following to the command and try again:
-   - **On an Apple Silicon Mac:** `-DCMAKE_MAKE_PROGRAM=/opt/homebrew/bin/ninja`
-   - **On an Intel Mac:** `-DCMAKE_MAKE_PROGRAM=/usr/local/bin/ninja`
-
-## FreeBSD
-
-The following instructions to build Cemu on FreeBSD are experimental. Some features available on other platforms are not available on FreeBSD (discord rich presence, bluetooth/support for actual Wii U controllers, auto-updates, etc.)
-
-To compile Cemu, a recent enough compiler and STL with C++20 support is required! Clang-15 or higher is what we recommend. Any version of FreeBSD 13.3-RELEASE or higher comes bundled with LLVM > version 15 as part of the base system. However, if for whatever reason your system lacks a recent version of LLVM you can install one by executing:
-
-`sudo pkg install llvm15`
-
-Or a higher version as desired.
-
-### Installing Dependencies
-
-`sudo pkg install boost-libs cmake-core curl glslang gtk3 libzip ninja png pkgconf pugixml rapidjson sdl2 wayland wayland-protocols wx32-gtk3 xorg zstd`
-
-### Build Cemu on BSD with CMake
-
-```
-git clone --recursive https://github.com/cemu-project/Cemu
-cd Cemu
-cmake -B build -DCMAKE_BUILD_TYPE=release -DENABLE_BLUEZ=OFF -DENABLE_DISCORD_RPC=OFF -DENABLE_FERAL_GAMEMODE=OFF -DENABLE_HIDAPI=OFF -DENABLE_VCPKG=OFF -G Ninja
-cmake --build build
-
-cd build && ninja install
-```
-
-You should now have a Cemu executable file in the /bin folder, which you can run using `./bin/Cemu_release`.
+- If step 3 gives you an error about not being able to find ninja, try appending `-DCMAKE_MAKE_PROGRAM=/usr/local/bin/ninja` to the command and running it again.
 
 ## Updating Cemu and source code
-1. To update your Cemu local repository, use the command `git pull --recurse-submodules` (run this command in the Cemu root).
+1. To update your Cemu local repository, use the command `git pull --recurse-submodules` (run this command on the Cemu root).
     - This should update your local copy of Cemu and all of its dependencies.
 2. Then, you can rebuild Cemu using the steps listed above, according to whether you use Linux or Windows.
 
@@ -244,13 +204,12 @@ Example usage: `cmake -S . -B build -DCMAKE_BUILD_TYPE=release -DENABLE_SDL=ON -
 | CEMU_CXX_FLAGS     |   | Flags passed straight to the compiler, e.g. `-march=native`, `-Wall`, `/W3` | ""      |                    |
 | ENABLE_CUBEB       |   | Enable cubeb audio backend                                                  | ON      |                    |
 | ENABLE_DISCORD_RPC |   | Enable Discord Rich presence support                                        | ON      |                    |
-| ENABLE_OPENGL      |   | Enable OpenGL graphics backend                                              | ON      |                    |
+| ENABLE_OPENGL      |   | Enable OpenGL graphics backend                                              | ON      | Currently required |
 | ENABLE_HIDAPI      |   | Enable HIDAPI (used for Wiimote controller API)                             | ON      |                    |
-| ENABLE_SDL         |   | Enable SDLController controller API                                         | ON      |                    |
+| ENABLE_SDL         |   | Enable SDLController controller API                                         | ON      | Currently required |
 | ENABLE_VCPKG       |   | Use VCPKG package manager to obtain dependencies                            | ON      |                    |
 | ENABLE_VULKAN      |   | Enable the Vulkan graphics backend                                          | ON      |                    |
 | ENABLE_WXWIDGETS   |   | Enable wxWidgets UI                                                         | ON      | Currently required |
-| ENABLE_LIBUSB      |   | Enable libusb                                                               | ON      |                    |
 
 ### Windows
 | Flag               | Description                       | Default | Note               |
@@ -270,4 +229,4 @@ Example usage: `cmake -S . -B build -DCMAKE_BUILD_TYPE=release -DENABLE_SDL=ON -
 ### macOS
 | Flag         | Description                                    | Default |
 |--------------|------------------------------------------------|---------|
-| MACOS_BUNDLE | macOS executable will be an application bundle | OFF     |
+| MACOS_BUNDLE | MacOS executable will be an application bundle | OFF     |

@@ -1,5 +1,5 @@
 #include "Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.h"
-#include "WindowSystem.h"
+#include "gui/guiWrapper.h"
 
 #include "Cafe/HW/Latte/Core/LatteRingBuffer.h"
 #include "Cafe/HW/Latte/Core/LatteDraw.h"
@@ -19,38 +19,7 @@
 #include "Cafe/HW/Latte/ISA/RegDefines.h"
 #include "Cafe/OS/libs/gx2/GX2.h"
 
-class DefaultOpenGLCanvasCallbacks : public OpenGLCanvasCallbacks
-{
-} g_defaultOpenGLCanvasCallbacks;
-
-OpenGLCanvasCallbacks* g_openGLCanvasCallbacks = &g_defaultOpenGLCanvasCallbacks;
-
-void SetOpenGLCanvasCallbacks(OpenGLCanvasCallbacks* callbacks)
-{
-	cemu_assert_debug(g_openGLCanvasCallbacks == &g_defaultOpenGLCanvasCallbacks);
-	g_openGLCanvasCallbacks = callbacks;
-}
-
-void ClearOpenGLCanvasCallbacks()
-{
-	cemu_assert_debug(g_openGLCanvasCallbacks != &g_defaultOpenGLCanvasCallbacks);
-	g_openGLCanvasCallbacks = &g_defaultOpenGLCanvasCallbacks;
-}
-
-bool GLCanvas_HasPadViewOpen()
-{
-	return g_openGLCanvasCallbacks->HasPadViewOpen();
-}
-
-bool GLCanvas_MakeCurrent(bool padView)
-{
-	return g_openGLCanvasCallbacks->MakeCurrent(padView);
-}
-
-void GLCanvas_SwapBuffers(bool swapTV, bool swapDRC)
-{
-	g_openGLCanvasCallbacks->SwapBuffers(swapTV, swapDRC);
-}
+#include "gui/canvas/OpenGLCanvas.h"
 
 #define STRINGIFY2(X) #X
 #define STRINGIFY(X) STRINGIFY2(X)
@@ -111,7 +80,7 @@ static const GLenum glAlphaTestFunc[] =
 	GL_ALWAYS
 };
 
-OpenGLRenderer::OpenGLRenderer() : Renderer(RendererAPI::OpenGL)
+OpenGLRenderer::OpenGLRenderer()
 {
 	glRendererState.useTextureUploadBuffer = false;
 	if (glRendererState.useTextureUploadBuffer)
@@ -145,8 +114,6 @@ OpenGLRenderer::~OpenGLRenderer()
 {
 	if(m_pipeline != 0)
 		glDeleteProgramPipelines(1, &m_pipeline);
-
-	glDeleteBuffers(1, &m_backbufferBlit_uniformBuffer);
 }
 
 OpenGLRenderer* OpenGLRenderer::GetInstance()
@@ -243,7 +210,7 @@ void LoadOpenGLImports()
 #include "Common/GLInclude/glFunctions.h"
 #undef GLFUNC
 }
-#elif BOOST_OS_LINUX || BOOST_OS_BSD
+#elif BOOST_OS_LINUX
 GL_IMPORT _GetOpenGLFunction(void* hLib, PFNGLXGETPROCADDRESSPROC func, const char* name)
 {
 	GL_IMPORT r = (GL_IMPORT)func((const GLubyte*)name);
@@ -278,7 +245,7 @@ void LoadOpenGLImports()
 #undef EGLFUNC
 }
 
-#if BOOST_OS_LINUX || BOOST_OS_BSD
+#if BOOST_OS_LINUX
 // dummy function for all code that is statically linked with cemu and attempts to use eglSwapInterval
 // used to suppress wxWidgets calls to eglSwapInterval
 extern "C"
@@ -303,25 +270,7 @@ void OpenGLRenderer::Initialize()
 
 	GLCanvas_MakeCurrent(false);
 	LoadOpenGLImports();
-	GetVendorInformation();
-
-	m_supportsS3TC = false;
-	m_supportsS3TCSRGB = false;
-	bool supportsTextureSRGB = false;
-	sint32 extensionCount = 0;
-	glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
-	for (sint32 i = 0; i < extensionCount; ++i)
-	{
-		const char* extension = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, i));
-		if (strcmp(extension, "GL_EXT_texture_compression_s3tc") == 0)
-			m_supportsS3TC = true;
-		else if (strcmp(extension, "GL_EXT_texture_sRGB") == 0)
-			supportsTextureSRGB = true;
-		else if (strcmp(extension, "GL_EXT_texture_compression_s3tc_srgb") == 0)
-			m_supportsS3TCSRGB = true;
-	}
-	// sRGB S3TC formats require both extensions
-	m_supportsS3TCSRGB |= m_supportsS3TC && supportsTextureSRGB;
+	GetVendorInformation();	
 
 #if BOOST_OS_WINDOWS
 	if (wglSwapIntervalEXT)
@@ -332,8 +281,6 @@ void OpenGLRenderer::Initialize()
 		glMaxShaderCompilerThreadsARB(0xFFFFFFFF);
 
 	cemuLog_log(LogType::Force, "OpenGL extensions:");
-	cemuLog_log(LogType::Force, "S3TC textures: {}", m_supportsS3TC ? "available" : "software decoding");
-	cemuLog_log(LogType::Force, "S3TC sRGB textures: {}", m_supportsS3TCSRGB ? "available" : "software decoding");
 	cemuLog_log(LogType::Force, "ARB_clip_control: {}", glClipControl ? "available" : "not supported");
 	cemuLog_log(LogType::Force, "ARB_get_program_binary: {}", (glGetProgramBinary != NULL && glProgramBinary != NULL) ? "available" : "not supported");
 	cemuLog_log(LogType::Force, "ARB_clear_texture: {}", (glClearTexImage != NULL) ? "available" : "not supported");
@@ -392,10 +339,6 @@ void OpenGLRenderer::Initialize()
 		glBindFramebuffer(GL_FRAMEBUFFER_EXT, glRendererState.clearFBO);
 		glBindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
 	}
-
-	// create uniform buffers for backbufferblit
-	glCreateBuffers(1, &m_backbufferBlit_uniformBuffer);
-	glNamedBufferStorage(m_backbufferBlit_uniformBuffer, sizeof(RendererOutputShader::OutputUniformVariables), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
 	draw_init();
 
@@ -536,7 +479,8 @@ void OpenGLRenderer::ClearColorbuffer(bool padView)
 
 void OpenGLRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool padView)
 {
-	if(!m_screenshot_requested && m_screenshot_state == ScreenshotState::None)
+	const bool hasScreenshotRequest = gui_hasScreenshotRequest();
+	if(!hasScreenshotRequest && m_screenshot_state == ScreenshotState::None)
 		return;
 
 	if (IsPadWindowActive())
@@ -562,13 +506,12 @@ void OpenGLRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool pad
 	texture_bindAndActivate(texView, 0);
 	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &screenshotWidth);
 	glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &screenshotHeight);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1); // set alignment to 1
 
 	const sint32 pixelDataSize = screenshotWidth * screenshotHeight * 3;
 	std::vector<uint8> rgb_data(pixelDataSize);
 
-	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb_data.data());
-	glPixelStorei(GL_PACK_ALIGNMENT, 4);
 	texture_bindAndActivate(nullptr, 0);
 	
 	const bool srcUsesSRGB = HAS_FLAG(texView->format, Latte::E_GX2SURFFMT::FMT_BIT_SRGB);
@@ -620,9 +563,9 @@ void OpenGLRenderer::DrawBackbufferQuad(LatteTextureView* texView, RendererOutpu
 	{
 		int windowWidth, windowHeight;
 		if (padView)
-			WindowSystem::GetPadWindowPhysSize(windowWidth, windowHeight);
+			gui_getPadWindowPhysSize(windowWidth, windowHeight);
 		else
-			WindowSystem::GetWindowPhysSize(windowWidth, windowHeight);
+			gui_getWindowPhysSize(windowWidth, windowHeight);
 		g_renderer->renderTarget_setViewport(0, 0, windowWidth, windowHeight, 0.0f, 1.0f);
 		g_renderer->ClearColorbuffer(padView);
 	}
@@ -630,12 +573,7 @@ void OpenGLRenderer::DrawBackbufferQuad(LatteTextureView* texView, RendererOutpu
 	shader_unbind(RendererShader::ShaderType::kGeometry);
 	shader_bind(shader->GetVertexShader());
 	shader_bind(shader->GetFragmentShader());
-
-	// update and bind uniform buffer
-	auto uniformBuffer = shader->FillUniformBlockBuffer(*texView, {imageWidth, imageHeight}, padView);
-	glNamedBufferSubData(m_backbufferBlit_uniformBuffer, 0, sizeof(uniformBuffer), &uniformBuffer);
-
-	glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_backbufferBlit_uniformBuffer);
+	shader->SetUniformParameters(*texView, {imageWidth, imageHeight});
 
 	// set viewport
 	glViewportIndexedf(0, imageX, imageY, imageWidth, imageHeight);
@@ -652,12 +590,14 @@ void OpenGLRenderer::DrawBackbufferQuad(LatteTextureView* texView, RendererOutpu
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, useLinearTexFilter ? GL_LINEAR : GL_NEAREST);
 	texViewGL->samplerState.filterMag = 0xFFFFFFFF;
 
-	glDisable(GL_FRAMEBUFFER_SRGB);
+	if ((!padView && !LatteGPUState.tvBufferUsesSRGB) || (padView && !LatteGPUState.drcBufferUsesSRGB))
+		glDisable(GL_FRAMEBUFFER_SRGB);
 
 	uint16 indexData[6] = { 0,1,2,3,4,5 };
 	glDrawRangeElements(GL_TRIANGLES, 0, 5, 6, GL_UNSIGNED_SHORT, indexData);
 
-	glEnable(GL_FRAMEBUFFER_SRGB);
+	if ((!padView && !LatteGPUState.tvBufferUsesSRGB) || (padView && !LatteGPUState.drcBufferUsesSRGB))
+		glEnable(GL_FRAMEBUFFER_SRGB);
 
 	// unbind texture
 	texture_bindAndActivate(nullptr, 0);
@@ -909,26 +849,6 @@ TextureDecoder* OpenGLRenderer::texture_chooseDecodedFormat(Latte::E_GX2SURFFMT 
 		}
 		return nullptr;
 	}
-	if (!SupportsS3TC(HAS_FLAG(format, Latte::E_GX2SURFFMT::FMT_BIT_SRGB)))
-	{
-		switch (format)
-		{
-		case Latte::E_GX2SURFFMT::BC1_UNORM:
-			return TextureDecoder_BC1_UNORM_uncompress::getInstance();
-		case Latte::E_GX2SURFFMT::BC1_SRGB:
-			return TextureDecoder_BC1_SRGB_uncompress::getInstance();
-		case Latte::E_GX2SURFFMT::BC2_UNORM:
-			return TextureDecoder_BC2_UNORM_uncompress::getInstance();
-		case Latte::E_GX2SURFFMT::BC2_SRGB:
-			return TextureDecoder_BC2_SRGB_uncompress::getInstance();
-		case Latte::E_GX2SURFFMT::BC3_UNORM:
-			return TextureDecoder_BC3_UNORM_uncompress::getInstance();
-		case Latte::E_GX2SURFFMT::BC3_SRGB:
-			return TextureDecoder_BC3_SRGB_uncompress::getInstance();
-		default:
-			break;
-		}
-	}
 	if (format == Latte::E_GX2SURFFMT::R4_G4_UNORM)
 		texDecoder = TextureDecoder_R4_G4_UNORM_To_RGBA4::getInstance();
 	else if (format == Latte::E_GX2SURFFMT::R4_G4_B4_A4_UNORM)
@@ -948,9 +868,9 @@ TextureDecoder* OpenGLRenderer::texture_chooseDecodedFormat(Latte::E_GX2SURFFMT 
 	else if (format == Latte::E_GX2SURFFMT::BC1_SRGB)
 		texDecoder = TextureDecoder_BC1::getInstance();
 	else if (format == Latte::E_GX2SURFFMT::BC2_UNORM)
-		texDecoder = TextureDecoder_BC2::getInstance();
+		texDecoder = TextureDecoder_BC2_UNORM_uncompress::getInstance();
 	else if (format == Latte::E_GX2SURFFMT::BC2_SRGB)
-		texDecoder = TextureDecoder_BC2::getInstance();
+		texDecoder = TextureDecoder_BC2_SRGB_uncompress::getInstance();
 	else if (format == Latte::E_GX2SURFFMT::BC3_UNORM)
 		texDecoder = TextureDecoder_BC3::getInstance();
 	else if (format == Latte::E_GX2SURFFMT::BC3_SRGB)
@@ -965,9 +885,9 @@ TextureDecoder* OpenGLRenderer::texture_chooseDecodedFormat(Latte::E_GX2SURFFMT 
 	else if (format == Latte::E_GX2SURFFMT::BC4_SNORM)
 	{
 		if (dim != Latte::E_DIM::DIM_2D && dim != Latte::E_DIM::DIM_2D_ARRAY)
-			texDecoder = TextureDecoder_BC4_UNORM_uncompress::getInstance();
-		else
 			texDecoder = TextureDecoder_BC4::getInstance();
+		else
+			texDecoder = TextureDecoder_BC4_UNORM_uncompress::getInstance();
 	}
 	else if (format == Latte::E_GX2SURFFMT::BC5_UNORM)
 		texDecoder = TextureDecoder_BC5::getInstance();
@@ -1025,8 +945,6 @@ TextureDecoder* OpenGLRenderer::texture_chooseDecodedFormat(Latte::E_GX2SURFFMT 
 		texDecoder = TextureDecoder_R11_G11_B10_FLOAT::getInstance();
 	else if (format == Latte::E_GX2SURFFMT::R32_G32_B32_A32_UINT)
 		texDecoder = TextureDecoder_R32_G32_B32_A32_UINT::getInstance();
-	else if (format == Latte::E_GX2SURFFMT::R32_G32_B32_A32_SINT)
-		texDecoder = TextureDecoder_R32_G32_B32_A32_UINT::getInstance(); // reuse the UINT decoder
 	else if (format == Latte::E_GX2SURFFMT::R16_G16_B16_A16_UINT)
 		texDecoder = TextureDecoder_R16_G16_B16_A16_UINT::getInstance();
 	else if (format == Latte::E_GX2SURFFMT::R8_G8_B8_A8_UINT)
@@ -1787,7 +1705,7 @@ void OpenGLRenderer::renderstate_updateBlendingAndColorControl()
 			//else
 			glPolygonOffset(frontScale, frontOffset);
 
-			prevPolygonFrontOffsetU32 = LatteGPUState.contextNew.PA_SU_POLY_OFFSET_FRONT_OFFSET.getRawValue();
+			prevPolygonFrontOffsetU32 = LatteGPUState.contextNew.PA_SU_POLY_OFFSET_FRONT_SCALE.getRawValue();
 			prevPolygonFrontScaleU32 = LatteGPUState.contextNew.PA_SU_POLY_OFFSET_FRONT_SCALE.getRawValue();
 			prevPolygonClampU32 = LatteGPUState.contextNew.PA_SU_POLY_OFFSET_CLAMP.getRawValue();
 		}

@@ -244,12 +244,9 @@ sint32 _deserializeSysArgsEx2(uint8* copyDataPtr, sint32 copyDataSize, void(*cbD
 				assert_dbg();
 				return 1;
 			}
-			cemu_assert(argumentDataSize >= 0 && argumentDataSize < 1024*1024*8); // sanity check. Figure out what the limits are on real HW
-			cemu_assert(idxStart >= (argumentDataSize + 1));
 			idx = idxStart - argumentDataSize - 1; // beginning of data
 			deserializedArg_t deserializedArg = { 0 };
 			deserializedArg.argument = argumentName;
-			cemu_assert((idx + argumentDataSize) <= copyDataSize);
 			deserializedArg.size = argumentDataSize;
 			deserializedArg.data = copyDataPtr + idx;
 			deserializeSysArg(&deserializedArg);
@@ -673,42 +670,25 @@ namespace sysapp
 	}
 }
 
-namespace sysapp
+// register sysapp functions
+void sysapp_load()
 {
-	class : public COSModule
-	{
-		public:
-		std::string_view GetName() override
-		{
-			return "sysapp";
-		}
+	osLib_addFunction("sysapp", "_SYSLaunchMiiStudio", sysappExport__SYSLaunchMiiStudio);
+	osLib_addFunction("sysapp", "_SYSGetMiiStudioArgs", sysappExport__SYSGetMiiStudioArgs);
+	osLib_addFunction("sysapp", "_SYSGetSettingsArgs", sysappExport__SYSGetSettingsArgs);
+	osLib_addFunction("sysapp", "_SYSReturnToCallerWithStandardResult", sysappExport__SYSReturnToCallerWithStandardResult);
+	
+	osLib_addFunction("sysapp", "_SYSGetSystemApplicationTitleId", sysappExport__SYSGetSystemApplicationTitleId);
+	osLib_addFunction("sysapp", "SYSGetUPIDFromTitleID", sysappExport_SYSGetUPIDFromTitleID);
 
-		void RPLMapped() override
-		{
-			osLib_addFunction("sysapp", "_SYSLaunchMiiStudio", sysappExport__SYSLaunchMiiStudio);
-			osLib_addFunction("sysapp", "_SYSGetMiiStudioArgs", sysappExport__SYSGetMiiStudioArgs);
-			osLib_addFunction("sysapp", "_SYSGetSettingsArgs", sysappExport__SYSGetSettingsArgs);
-			osLib_addFunction("sysapp", "_SYSReturnToCallerWithStandardResult", sysappExport__SYSReturnToCallerWithStandardResult);
+	osLib_addFunction("sysapp", "_SYSGetEShopArgs", sysappExport__SYSGetEShopArgs);
 
-			osLib_addFunction("sysapp", "_SYSGetSystemApplicationTitleId", sysappExport__SYSGetSystemApplicationTitleId);
-			osLib_addFunction("sysapp", "SYSGetUPIDFromTitleID", sysappExport_SYSGetUPIDFromTitleID);
+	osLib_addFunction("sysapp", "SYSGetVodArgs", sysappExport_SYSGetVodArgs);
 
-			osLib_addFunction("sysapp", "_SYSGetEShopArgs", sysappExport__SYSGetEShopArgs);
+	osLib_addFunction("sysapp", "SYSGetStandardResult", sysappExport_SYSGetStandardResult);
 
-			osLib_addFunction("sysapp", "SYSGetVodArgs", sysappExport_SYSGetVodArgs);
+	cafeExportRegisterFunc(_SYSGetLauncherArgs, "sysapp", "_SYSGetLauncherArgs", LogType::Placeholder);
+	cafeExportRegisterFunc(_SYSGetAccountArgs, "sysapp", "_SYSGetAccountArgs", LogType::Placeholder);
 
-			osLib_addFunction("sysapp", "SYSGetStandardResult", sysappExport_SYSGetStandardResult);
-
-			cafeExportRegisterFunc(_SYSGetLauncherArgs, "sysapp", "_SYSGetLauncherArgs", LogType::Placeholder);
-			cafeExportRegisterFunc(_SYSGetAccountArgs, "sysapp", "_SYSGetAccountArgs", LogType::Placeholder);
-
-			sysapp::load();
-		};
-
-	}s_COSsysappModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSsysappModule;
-	}
+	sysapp::load();
 }

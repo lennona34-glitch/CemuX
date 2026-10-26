@@ -1,8 +1,9 @@
 #include "Cafe/OS/libs/snd_core/ax.h"
 #include "Cafe/OS/libs/snd_core/ax_internal.h"
+#include "Cafe/HW/MMU/MMU.h"
 #include "audio/IAudioAPI.h"
+//#include "ax.h"
 #include "config/CemuConfig.h"
-#include "Common/CafeStaticVar.h"
 
 namespace snd_core
 {
@@ -139,8 +140,8 @@ namespace snd_core
 		_AXOutInitDeviceModes();
 	}
 
-	extern CafeStaticVar<sint32, AX_SAMPLES_MAX * AX_TV_CHANNEL_COUNT> __AXTVBuffer48;
-	extern CafeStaticVar<sint32, AX_SAMPLES_MAX* AX_DRC_CHANNEL_COUNT * 2> __AXDRCBuffer48;
+	extern SysAllocator<sint32, AX_SAMPLES_MAX * AX_TV_CHANNEL_COUNT> __AXTVBuffer48;
+	extern SysAllocator<sint32, AX_SAMPLES_MAX* AX_DRC_CHANNEL_COUNT * 2> __AXDRCBuffer48;
 
 	sint16 __buf_AXTVDMABuffers_0[AX_SAMPLES_MAX * AX_TV_CHANNEL_COUNT];
 	sint16 __buf_AXTVDMABuffers_1[AX_SAMPLES_MAX * AX_TV_CHANNEL_COUNT];
@@ -403,24 +404,27 @@ namespace snd_core
 		{
 			try
 			{
-				g_tvAudio = IAudioAPI::CreateDeviceFromConfig(IAudioAPI::AudioType::TV, 48000, snd_core::AX_SAMPLES_PER_3MS_48KHZ * AX_FRAMES_PER_GROUP, 16);
+				g_tvAudio = IAudioAPI::CreateDeviceFromConfig(true, 48000, snd_core::AX_SAMPLES_PER_3MS_48KHZ * AX_FRAMES_PER_GROUP, 16);
 			}
 			catch (std::runtime_error& ex)
 			{
 				cemuLog_log(LogType::Force, "can't initialize tv audio: {}", ex.what());
+				exit(0);
 			}
 		}
 
-		g_padVolume = GetConfig().pad_volume;
 		if (!g_padAudio)
 		{
 			try
 			{
-				g_padAudio = IAudioAPI::CreateDeviceFromConfig(IAudioAPI::AudioType::Gamepad, 48000, snd_core::AX_SAMPLES_PER_3MS_48KHZ * AX_FRAMES_PER_GROUP, 16);
+				g_padAudio = IAudioAPI::CreateDeviceFromConfig(false, 48000, snd_core::AX_SAMPLES_PER_3MS_48KHZ * AX_FRAMES_PER_GROUP, 16);
+				if(g_padAudio)
+					g_padVolume = g_padAudio->GetVolume();
 			}
 			catch (std::runtime_error& ex)
 			{
 				cemuLog_log(LogType::Force, "can't initialize pad audio: {}", ex.what());
+				exit(0);
 			}
 		}
 	}
@@ -428,8 +432,6 @@ namespace snd_core
 	void AXOut_reset()
 	{
 		std::unique_lock lock(g_audioMutex);
-		tempAudioBlockCounter = 0;
-		tempDRCAudioBlockCounter = 0;
 		if (g_tvAudio)
 		{
 			g_tvAudio->Stop();
@@ -439,11 +441,6 @@ namespace snd_core
 		{
 			g_padAudio->Stop();
 			g_padAudio.reset();
-		}
-		if (g_portalAudio)
-		{
-			g_portalAudio->Stop();
-			g_portalAudio.reset();
 		}
 	}
 
@@ -464,14 +461,6 @@ namespace snd_core
 				g_padAudio->Play();
 			else
 				g_padAudio->Stop();
-		}
-
-		if (g_portalAudio)
-		{
-			if (isPlaying)
-				g_portalAudio->Play();
-			else
-				g_portalAudio->Stop();
 		}
 	}
 

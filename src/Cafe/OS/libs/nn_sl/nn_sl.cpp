@@ -4,14 +4,11 @@
 #include "config/ActiveSettings.h"
 #include "Cafe/CafeSystem.h"
 
-
 namespace nn
 {
 	typedef uint32 Result;
 	namespace sl
 	{
-		constinit COSStaticData s_nnslStaticData;
-
 		struct VTableEntry
 		{
 			uint16be offsetA{0};
@@ -69,7 +66,7 @@ namespace nn
 				VTableEntry dtor;
 				VTableEntry get;
 			};
-			static inline CafeStaticVar<VTable> s_titleVTable{s_nnslStaticData};
+			static inline SysAllocator<VTable> s_titleVTable;
 
 			static WhiteListAccessor* ctor(WhiteListAccessor* _this)
 			{
@@ -100,49 +97,19 @@ namespace nn
 		};
 		static_assert(sizeof(WhiteListAccessor) == 0x04);
 
-		CafeStaticVar<WhiteListAccessor> s_defaultWhiteListAccessor{s_nnslStaticData};
+		SysAllocator<WhiteListAccessor> s_defaultWhiteListAccessor;
 
 		WhiteListAccessor* GetDefaultWhiteListAccessor()
 		{
 			return s_defaultWhiteListAccessor;
 		}
-
-		class : public COSModule
-		{
-			public:
-			std::string_view GetName() override
-			{
-				return "nn_sl";
-			}
-
-			void RPLUnmapped() override
-			{
-				s_nnslStaticData.Deallocate();
-			}
-
-			void RPLMapped() override
-			{
-				s_nnslStaticData.Allocate();
-				cafeExportRegisterFunc(nn::sl::GetDefaultWhiteListAccessor, "nn_sl", "GetDefaultWhiteListAccessor__Q2_2nn2slFv", LogType::NN_SL);
-			};
-
-			void rpl_entry(uint32 moduleHandle, coreinit::RplEntryReason reason) override
-			{
-				if (reason == coreinit::RplEntryReason::Loaded)
-				{
-					nn::sl::WhiteListAccessor::InitVTable();
-					nn::sl::WhiteListAccessor::ctor(nn::sl::s_defaultWhiteListAccessor);
-				}
-				else if (reason == coreinit::RplEntryReason::Unloaded)
-				{
-					// nothing to clean up
-				}
-			}
-		}s_COSnnSlModule;
-
-		COSModule* GetModule()
-		{
-			return &s_COSnnSlModule;
-		}
 	} // namespace sl
 } // namespace nn
+
+void nnSL_load()
+{
+	nn::sl::WhiteListAccessor::InitVTable();
+	nn::sl::WhiteListAccessor::ctor(nn::sl::s_defaultWhiteListAccessor);
+
+	cafeExportRegisterFunc(nn::sl::GetDefaultWhiteListAccessor, "nn_sl", "GetDefaultWhiteListAccessor__Q2_2nn2slFv", LogType::NN_SL);
+}

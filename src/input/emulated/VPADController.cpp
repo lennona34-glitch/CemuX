@@ -1,12 +1,11 @@
 #include "input/emulated/VPADController.h"
 #include "input/api/Controller.h"
-#ifdef HAS_SDL
 #include "input/api/SDL/SDLController.h"
-#endif
-#include "WindowSystem.h"
+#include "gui/guiWrapper.h"
 #include "input/InputManager.h"
 #include "Cafe/HW/Latte/Core/Latte.h"
 #include "Cafe/CafeSystem.h"
+#include <wx/intl.h>
 
 enum ControllerVPADMapping2 : uint32
 {
@@ -112,15 +111,14 @@ void VPADController::VPADRead(VPADStatus_t& status, const BtnRepeat& repeat)
 
 	// button repeat
 	const auto now = std::chrono::high_resolution_clock::now();
-	uint32 currentHold = status.hold;
-	if (currentHold != m_last_holdvalue)
+	if (status.hold != m_last_holdvalue)
 	{
 		m_last_hold_change = m_last_pulse = now;
 	}
 
 	if (repeat.pulse > 0)
 	{
-		if (currentHold != 0 && m_last_hold_change + std::chrono::milliseconds(repeat.delay) <= now)
+		if (m_last_hold_change + std::chrono::milliseconds(repeat.delay) >= now)
 		{
 			if ((m_last_pulse + std::chrono::milliseconds(repeat.pulse)) < now)
 			{
@@ -131,9 +129,9 @@ void VPADController::VPADRead(VPADStatus_t& status, const BtnRepeat& repeat)
 	}
 
 	// general
-	status.release = m_last_holdvalue & ~currentHold;
-	status.trig = ~m_last_holdvalue & currentHold;
-	m_last_holdvalue = currentHold;
+	status.release = m_last_holdvalue & ~status.hold;
+	status.trig = ~m_last_holdvalue & status.hold;
+	m_last_holdvalue = status.hold;
 
 	// touch
 	update_touch(status);
@@ -289,9 +287,9 @@ void VPADController::update_motion(VPADStatus_t& status)
 
 		int w, h;
 		if (pad_view)
-			WindowSystem::GetPadWindowPhysSize(w, h);
+			gui_getPadWindowPhysSize(w, h);
 		else
-			WindowSystem::GetWindowPhysSize(w, h);
+			gui_getWindowPhysSize(w, h);
 
 		float wx = mousePos.x / w;
 		float wy = mousePos.y / h;
@@ -369,21 +367,21 @@ std::string_view VPADController::get_button_name(ButtonId id)
 	case kButtonId_ZR: return "ZR";
 	case kButtonId_Plus: return "+";
 	case kButtonId_Minus: return "-";
-	case kButtonId_Up: return TR_NOOP("up");
-	case kButtonId_Down: return TR_NOOP("down");
-	case kButtonId_Left: return TR_NOOP("left");
-	case kButtonId_Right: return TR_NOOP("right");
-	case kButtonId_StickL: return TR_NOOP("click");
-	case kButtonId_StickR: return TR_NOOP("click");
-	case kButtonId_StickL_Up: return TR_NOOP("up");
-	case kButtonId_StickL_Down: return TR_NOOP("down");
-	case kButtonId_StickL_Left: return TR_NOOP("left");
-	case kButtonId_StickL_Right: return TR_NOOP("right");
-	case kButtonId_StickR_Up: return TR_NOOP("up");
-	case kButtonId_StickR_Down: return TR_NOOP("down");
-	case kButtonId_StickR_Left: return TR_NOOP("left");
-	case kButtonId_StickR_Right: return TR_NOOP("right");
-	case kButtonId_Home: return TR_NOOP("home");
+	case kButtonId_Up: return wxTRANSLATE("up");
+	case kButtonId_Down: return wxTRANSLATE("down");
+	case kButtonId_Left: return wxTRANSLATE("left");
+	case kButtonId_Right: return wxTRANSLATE("right");
+	case kButtonId_StickL: return wxTRANSLATE("click");
+	case kButtonId_StickR: return wxTRANSLATE("click");
+	case kButtonId_StickL_Up: return wxTRANSLATE("up");
+	case kButtonId_StickL_Down: return wxTRANSLATE("down");
+	case kButtonId_StickL_Left: return wxTRANSLATE("left");
+	case kButtonId_StickL_Right: return wxTRANSLATE("right");
+	case kButtonId_StickR_Up: return wxTRANSLATE("up");
+	case kButtonId_StickR_Down: return wxTRANSLATE("down");
+	case kButtonId_StickR_Left: return wxTRANSLATE("left");
+	case kButtonId_StickR_Right: return wxTRANSLATE("right");
+	case kButtonId_Home: return wxTRANSLATE("home");
 	default:
 		cemu_assert_debug(false);
 		return "";
@@ -513,7 +511,6 @@ bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>& 
 	std::vector<std::pair<uint64, uint64>> mapping;
 	switch (controller->api())
 	{
-#ifdef HAS_SDL
 	case InputAPI::SDLController: {
 		const auto sdl_controller = std::static_pointer_cast<SDLController>(controller);
 		if (sdl_controller->get_guid() == SDLController::kLeftJoyCon)
@@ -637,7 +634,6 @@ bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>& 
 		}
 		break;
 	}
-#endif
 	case InputAPI::XInput:
 	{
 		mapping =

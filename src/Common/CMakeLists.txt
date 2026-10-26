@@ -1,7 +1,5 @@
 add_library(CemuCommon 
   betype.h
-  CafeStaticVar.cpp
-  CafeStaticVar.h
   cpu_features.cpp
   cpu_features.h
   enumFlags.h
@@ -48,18 +46,24 @@ PRIVATE
 )
 endif()
 
-if(LINUX)
+if(UNIX AND NOT APPLE)
 	target_sources(CemuCommon PRIVATE
 		ExceptionHandler/ELFSymbolTable.cpp
 		ExceptionHandler/ELFSymbolTable.h
 	)
 endif()
 
-# CemuCommon always builts the precompiled header
-target_precompile_headers(CemuCommon PRIVATE precompiled.h)
+# All the targets wanting to use the precompiled.h header
+# have to link to CemuCommon
+target_precompile_headers(CemuCommon PUBLIC precompiled.h)
 target_include_directories(CemuCommon PUBLIC "../")
 
 target_link_libraries(CemuCommon PRIVATE
+	CemuCafe
+	CemuConfig
+	CemuComponents
+	Boost::nowide
+	Boost::filesystem
 	glm::glm
 )
 
@@ -68,12 +72,6 @@ if (UNIX AND NOT APPLE)
 endif()
 
 # PUBLIC because:
-# - boost/nowide/convert.hpp is included in precompiled.h
 # - boost/predef/os.h is included in platform.h
 # - fmt/core.h is included in precompiled.h
-target_link_libraries(CemuCommon PUBLIC
-	Threads::Threads # necessary because some targets may need -pthreads
-	Boost::nowide
-	Boost::headers
-	fmt::fmt
-)
+target_link_libraries(CemuCommon PUBLIC Boost::headers fmt::fmt)

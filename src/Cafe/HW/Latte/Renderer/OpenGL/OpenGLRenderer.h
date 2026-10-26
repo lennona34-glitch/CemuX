@@ -6,34 +6,14 @@
 
 #define GPU_GL_MAX_NUM_ATTRIBUTE		(16) // Wii U GPU supports more than 16 but not all desktop GPUs do. Have to keep this at 16 until we find a better solution
 
-class OpenGLCanvasCallbacks
-{
-  public:
-	virtual bool HasPadViewOpen() const
-	{
-		return false;
-	}
-	virtual bool MakeCurrent(bool padView)
-	{
-		return false;
-	}
-	virtual void SwapBuffers(bool swapTV, bool swapDRC) {}
-	virtual ~OpenGLCanvasCallbacks() = default;
-};
-
-void SetOpenGLCanvasCallbacks(OpenGLCanvasCallbacks* callbacks);
-void ClearOpenGLCanvasCallbacks();
-
-bool GLCanvas_HasPadViewOpen();
-bool GLCanvas_MakeCurrent(bool padView);
-void GLCanvas_SwapBuffers(bool swapTV, bool swapDRC);
-
 class OpenGLRenderer : public Renderer
 {
 	friend class OpenGLCanvas;
 public:
 	OpenGLRenderer();
 	~OpenGLRenderer();
+
+	RendererAPI GetType() override { return RendererAPI::OpenGL; }
 
 	static OpenGLRenderer* GetInstance();
 
@@ -87,7 +67,6 @@ public:
 	void* texture_acquireTextureUploadBuffer(uint32 size) override;
 	void texture_releaseTextureUploadBuffer(uint8* mem) override;
 
-	bool SupportsS3TC(bool isSRGB) const { return isSRGB ? m_supportsS3TCSRGB : m_supportsS3TC; }
 	TextureDecoder* texture_chooseDecodedFormat(Latte::E_GX2SURFFMT format, bool isDepth, Latte::E_DIM dim, uint32 width, uint32 height) override;
 
 	void texture_clearSlice(LatteTexture* hostTexture, sint32 sliceIndex, sint32 mipIndex) override;
@@ -112,7 +91,7 @@ public:
 	void bufferCache_upload(uint8* buffer, sint32 size, uint32 bufferOffset) override;
 	void bufferCache_copy(uint32 srcOffset, uint32 dstOffset, uint32 size) override;
 
-	void buffer_bindVertexBuffers(std::span<BindBufferParam> bindings) override;
+	void buffer_bindVertexBuffer(uint32 bufferIndex, uint32 offset, uint32 size) override;
 	void buffer_bindUniformBuffer(LatteConst::ShaderType shaderType, uint32 bufferIndex, uint32 offset, uint32 size) override;
 
 	void _setupVertexAttributes();
@@ -158,7 +137,7 @@ public:
 	void draw_init();
 
 	void draw_beginSequence() override;
-	void draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 instanceCount, uint32 count, MPTR indexDataMPTR, Latte::LATTE_VGT_DMA_INDEX_TYPE::E_INDEX_TYPE indexType, const LatteDrawcallContext& drawcallContext) override;
+	void draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 instanceCount, uint32 count, MPTR indexDataMPTR, Latte::LATTE_VGT_DMA_INDEX_TYPE::E_INDEX_TYPE indexType, bool isFirst) override;
 	void draw_endSequence() override;
 
 	template<bool TIsMinimal, bool THasProfiling>
@@ -185,8 +164,6 @@ private:
 	GLuint m_pipeline = 0;
 
 	bool m_isPadViewContext{};
-	bool m_supportsS3TC = false;
-	bool m_supportsS3TCSRGB = false;
 
 	// rendertarget viewport
 	float prevViewportX = 0;
@@ -209,9 +186,6 @@ private:
 
 	sint32 activeTextureUnit = 0;
 	void* m_latteBoundTextures[Latte::GPU_LIMITS::NUM_TEXTURES_PER_STAGE * 3]{};
-
-	// backbuffer blit
-	GLuint m_backbufferBlit_uniformBuffer;
 
 	// attribute stream
 	GLuint glAttributeCacheAB{};
@@ -274,11 +248,11 @@ private:
 	// occlusion queries
 	std::vector<class LatteQueryObjectGL*> list_queryCacheOcclusion; // cache for unused queries
 
-	// resource garbage collection
+	// resource garbage collection	
 	struct BufferCacheReleaseQueueEntry
 	{
 		BufferCacheReleaseQueueEntry(VirtualBufferHeap_t* heap, VirtualBufferHeapEntry_t* entry) : m_heap(heap), m_entry(entry) {};
-
+		
 		void free()
 		{
 			virtualBufferHeap_free(m_heap, m_entry);

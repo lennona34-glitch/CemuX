@@ -1,10 +1,9 @@
-#include "util/helpers/helpers.h"
+#include <util/helpers/helpers.h>
 #include "iosu_odm.h"
 #include "config/ActiveSettings.h"
 #include "Common/FileStream.h"
 #include "util/helpers/Semaphore.h"
 #include "../kernel/iosu_kernel.h"
-#include "Common/CafeStaticVar.h"
 
 namespace iosu
 {
@@ -19,8 +18,7 @@ namespace iosu
 		std::atomic_bool s_threadInitialized{ false };
 
 		IOSMsgQueueId s_msgQueueId;
-		constinit IOSUStaticData s_odmStaticData;
-		CafeStaticVar<iosu::kernel::IOSMessage, 128> _s_msgBuffer{s_odmStaticData};
+		SysAllocator<iosu::kernel::IOSMessage, 128> _s_msgBuffer;
 
 		enum class ODM_CMD_OPERATION_TYPE
 		{
@@ -141,7 +139,6 @@ namespace iosu
 		{
 			if (s_isRunning.exchange(true))
 				return;
-			s_odmStaticData.Allocate();
 			s_threadInitialized = false;
 			s_requestStop = false;
 			s_serviceThread = std::thread(&ODMServiceThread);
@@ -155,8 +152,6 @@ namespace iosu
 			s_requestStop = true;
 			IOS_SendMessage(s_msgQueueId, 0, 0);
 			s_serviceThread.join();
-			IOS_DestroyMessageQueue(s_msgQueueId);
-			s_odmStaticData.Deallocate();
 		}
 	}
 }

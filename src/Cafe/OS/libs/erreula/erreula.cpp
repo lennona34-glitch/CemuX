@@ -1,4 +1,4 @@
-#include "Cafe/OS/common/OSCommon.h"
+﻿#include "Cafe/OS/common/OSCommon.h"
 #include "erreula.h"
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
 #include "util/helpers/helpers.h"
@@ -6,16 +6,16 @@
 #include <imgui.h>
 #include "imgui/imgui_extension.h"
 
+#include <wx/msgdlg.h>
+
 #include "Cafe/OS/libs/coreinit/coreinit_FS.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Time.h"
 #include "Cafe/OS/libs/vpad/vpad.h"
-#include "OS/libs/coreinit/coreinit_DynLoad.h"
 
 namespace nn
 {
 namespace erreula
 {
-	constinit COSStaticData s_erreulaStaticData;
 
 	enum class ErrorDialogType : uint32
 	{
@@ -223,13 +223,15 @@ namespace erreula
 
 	struct ErrEula_t
 	{
-		CafeStaticVar<coreinit::OSMutex> mutex{s_erreulaStaticData};
-		uint32 regionType{0};
-		uint32 langType{0};
+		SysAllocator<coreinit::OSMutex> mutex;
+		uint32 regionType;
+		uint32 langType;
 		MEMPTR<coreinit::FSClient_t> fsClient;
+
 		std::unique_ptr<ErrEulaInstance> errEulaInstance;
+
 		AppearError currentDialog;
-		bool homeNixSignVisible{false};
+		bool homeNixSignVisible;
 	} g_errEula = {};
 	
 	std::wstring GetText(uint16be* text)
@@ -487,68 +489,32 @@ namespace erreula
 		ImGui::GetStyle().Alpha = originalAlpha;
 	}
 
-	class : public COSModule
+	void load()
 	{
-		public:
-		std::string_view GetName() override
-		{
-			return "erreula";
-		}
+		g_errEula.errEulaInstance.reset();
 
-		void RPLUnmapped() override
-		{
-			s_erreulaStaticData.Deallocate();
-		}
+		OSInitMutexEx(&g_errEula.mutex, nullptr);
 
-		void RPLMapped() override
-		{
-			s_erreulaStaticData.Allocate();
-			cafeExportRegisterFunc(ErrEulaCreate, "erreula", "ErrEulaCreate__3RplFPUcQ3_2nn7erreula10RegionTypeQ3_2nn7erreula8LangTypeP8FSClient", LogType::Placeholder);
-			cafeExportRegisterFunc(ErrEulaDestroy, "erreula", "ErrEulaDestroy__3RplFv", LogType::Placeholder);
+		cafeExportRegisterFunc(ErrEulaCreate, "erreula", "ErrEulaCreate__3RplFPUcQ3_2nn7erreula10RegionTypeQ3_2nn7erreula8LangTypeP8FSClient", LogType::Placeholder);
+		cafeExportRegisterFunc(ErrEulaDestroy, "erreula", "ErrEulaDestroy__3RplFv", LogType::Placeholder);
 
-			cafeExportRegisterFunc(IsDecideSelectButtonError, "erreula", "ErrEulaIsDecideSelectButtonError__3RplFv", LogType::Placeholder);
-			cafeExportRegisterFunc(IsDecideSelectLeftButtonError, "erreula", "ErrEulaIsDecideSelectLeftButtonError__3RplFv", LogType::Placeholder);
-			cafeExportRegisterFunc(IsDecideSelectRightButtonError, "erreula", "ErrEulaIsDecideSelectRightButtonError__3RplFv", LogType::Placeholder);
+		cafeExportRegisterFunc(IsDecideSelectButtonError, "erreula", "ErrEulaIsDecideSelectButtonError__3RplFv", LogType::Placeholder);
+		cafeExportRegisterFunc(IsDecideSelectLeftButtonError, "erreula", "ErrEulaIsDecideSelectLeftButtonError__3RplFv", LogType::Placeholder);
+		cafeExportRegisterFunc(IsDecideSelectRightButtonError, "erreula", "ErrEulaIsDecideSelectRightButtonError__3RplFv", LogType::Placeholder);
 
-			cafeExportRegisterFunc(GetResultCode, "erreula", "ErrEulaGetResultCode__3RplFv", LogType::Placeholder);
-			cafeExportRegisterFunc(GetResultType, "erreula", "ErrEulaGetResultType__3RplFv", LogType::Placeholder);
+		cafeExportRegisterFunc(GetResultCode, "erreula", "ErrEulaGetResultCode__3RplFv", LogType::Placeholder);
+		cafeExportRegisterFunc(GetResultType, "erreula", "ErrEulaGetResultType__3RplFv", LogType::Placeholder);
 
-			cafeExportRegisterFunc(ErrEulaAppearError, "erreula", "ErrEulaAppearError__3RplFRCQ3_2nn7erreula9AppearArg", LogType::Placeholder);
-			cafeExportRegisterFunc(ErrEulaDisappearError, "erreula", "ErrEulaDisappearError__3RplFv", LogType::Placeholder);
-			cafeExportRegisterFunc(ErrEulaGetStateErrorViewer, "erreula", "ErrEulaGetStateErrorViewer__3RplFv", LogType::Placeholder);
+		cafeExportRegisterFunc(ErrEulaAppearError, "erreula", "ErrEulaAppearError__3RplFRCQ3_2nn7erreula9AppearArg", LogType::Placeholder);
+		cafeExportRegisterFunc(ErrEulaDisappearError, "erreula", "ErrEulaDisappearError__3RplFv", LogType::Placeholder);
+		cafeExportRegisterFunc(ErrEulaGetStateErrorViewer, "erreula", "ErrEulaGetStateErrorViewer__3RplFv", LogType::Placeholder);
 
-			cafeExportRegisterFunc(ErrEulaCalc, "erreula", "ErrEulaCalc__3RplFRCQ3_2nn7erreula14ControllerInfo", LogType::Placeholder);
+		cafeExportRegisterFunc(ErrEulaCalc, "erreula", "ErrEulaCalc__3RplFRCQ3_2nn7erreula14ControllerInfo", LogType::Placeholder);
 
-			osLib_addFunction("erreula", "ErrEulaAppearHomeNixSign__3RplFRCQ3_2nn7erreula14HomeNixSignArg", export_AppearHomeNixSign);
-			osLib_addFunction("erreula", "ErrEulaChangeLang__3RplFQ3_2nn7erreula8LangType", export_ChangeLang);
-			osLib_addFunction("erreula", "ErrEulaIsAppearHomeNixSign__3RplFv", export_IsAppearHomeNixSign);
-			osLib_addFunction("erreula", "ErrEulaDisappearHomeNixSign__3RplFv", export_DisappearHomeNixSign);
-		}
-
-		void rpl_entry(uint32 moduleHandle, coreinit::RplEntryReason reason) override
-		{
-			if (reason == coreinit::RplEntryReason::Loaded)
-			{
-				g_errEula.errEulaInstance.reset();
-				OSInitMutexEx(&g_errEula.mutex, nullptr);
-			}
-			else if (reason == coreinit::RplEntryReason::Unloaded)
-			{
-				g_errEula.errEulaInstance.reset();
-				// todo - refactor and clean up these variables to be part of errEulaInstance
-				g_errEula.regionType = 0;
-				g_errEula.langType = 0;
-				g_errEula.fsClient = nullptr;
-				g_errEula.currentDialog = {};
-				g_errEula.homeNixSignVisible = {};
-				g_errEula.currentDialog = {};
-			}
-		}
-	}s_COSErreulaModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSErreulaModule;
+		osLib_addFunction("erreula", "ErrEulaAppearHomeNixSign__3RplFRCQ3_2nn7erreula14HomeNixSignArg", export_AppearHomeNixSign);
+		osLib_addFunction("erreula", "ErrEulaChangeLang__3RplFQ3_2nn7erreula8LangType", export_ChangeLang);
+		osLib_addFunction("erreula", "ErrEulaIsAppearHomeNixSign__3RplFv", export_IsAppearHomeNixSign);
+		osLib_addFunction("erreula", "ErrEulaDisappearHomeNixSign__3RplFv", export_DisappearHomeNixSign);
 	}
 }
 }

@@ -3,7 +3,6 @@
 #include <charconv>
 #include <filesystem>
 #include <string_view>
-#include <set>
 
 #include "util/math/vector2.h"
 #include "util/math/vector3.h"
@@ -11,6 +10,12 @@
 #ifdef __clang__
 #include "Common/unix/fast_float.h"
 #endif
+
+template <typename TType>
+constexpr auto to_underlying(TType v) noexcept
+{
+	return static_cast<std::underlying_type_t<TType>>(v);
+}
 
 // wrapper to allow reverse iteration with range-based loops before C++20
 template<typename T>
@@ -71,6 +76,8 @@ std::string_view& trim(std::string_view& str, const std::string& chars = "\t\n\v
 std::string GenerateRandomString(size_t length);
 std::string GenerateRandomString(size_t length, std::string_view characters);
 
+std::wstring GetSystemErrorMessageW();
+std::wstring GetSystemErrorMessageW(DWORD error_code);
 std::string GetSystemErrorMessage();
 std::string GetSystemErrorMessage(DWORD error_code);
 std::string GetSystemErrorMessage(const std::exception& ex);

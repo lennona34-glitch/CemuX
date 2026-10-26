@@ -1,4 +1,6 @@
 #pragma once
+
+#include <utility>
 #include "config/CemuConfig.h"
 #include "config/NetworkSettings.h"
 
@@ -81,6 +83,7 @@ public:
 	// general
 	[[nodiscard]] static bool LoadSharedLibrariesEnabled();
 	[[nodiscard]] static bool DisplayDRCEnabled();
+	[[nodiscard]] static bool FullscreenEnabled();
 
 	// cpu
 	[[nodiscard]] static CPUMode GetCPUMode();
@@ -94,10 +97,6 @@ public:
 	[[nodiscard]] static bool WaitForGX2DrawDoneEnabled();
 	[[nodiscard]] static GraphicAPI GetGraphicsAPI();
 
-	// gamma
-	[[nodiscard]] static float GetTVGamma();
-	[[nodiscard]] static float GetDRCGamma();
-
 	// audio
 	[[nodiscard]] static bool AudioOutputOnlyAux();
 	static void EnableAudioOnlyAux(bool state);
@@ -110,11 +109,9 @@ public:
 	// dump options
 	[[nodiscard]] static bool DumpShadersEnabled();
 	[[nodiscard]] static bool DumpTexturesEnabled();
-	[[nodiscard]] static bool DumpRecompilerFunctionsEnabled();
 	[[nodiscard]] static bool DumpLibcurlRequestsEnabled();
 	static void EnableDumpShaders(bool state);
 	static void EnableDumpTextures(bool state);
-	static void EnableDumpRecompilerFunctions(bool state);
 	static void EnableDumpLibcurlRequests(bool state);
 
 	// hacks
@@ -128,7 +125,6 @@ private:
 	// dump options
 	inline static bool s_dump_shaders = false;
 	inline static bool s_dump_textures = false;
-	inline static bool s_dump_recompiler_functions = false;
 	inline static bool s_dump_libcurl_requests = false;
 
 	// timer speed

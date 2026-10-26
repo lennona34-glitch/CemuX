@@ -1,11 +1,12 @@
 #include "Cafe/GraphicPack/GraphicPack2.h"
-#include "Cemu/Logging/CemuLogging.h"
 #include "Common/FileStream.h"
-#include "WindowSystem.h"
 #include "util/helpers/StringParser.h"
 #include "Cemu/PPCAssembler/ppcAssembler.h"
 #include "Cafe/OS/RPL/rpl_structs.h"
 #include "boost/algorithm/string.hpp"
+
+#include "gui/wxgui.h" // for wxMessageBox
+#include "gui/helpers/wxHelpers.h"
 
 // error handler
 void PatchErrorHandler::printError(class PatchGroup* patchGroup, sint32 lineNumber, std::string_view errorMsg)
@@ -39,13 +40,13 @@ void PatchErrorHandler::printError(class PatchGroup* patchGroup, sint32 lineNumb
 
 void PatchErrorHandler::showStageErrorMessageBox()
 {
-	std::string errorMsg;
+	wxString errorMsg;
 	if (m_gp)
 	{
 		if (m_stage == STAGE::PARSER)
-			errorMsg.assign(_tr("Failed to load patches for graphic pack \'{}\'", m_gp->GetName()));
+			errorMsg.assign(formatWxString(_("Failed to load patches for graphic pack \'{}\'"), m_gp->GetName()));
 		else
-			errorMsg.assign(_tr("Failed to apply patches for graphic pack \'{}\'", m_gp->GetName()));
+			errorMsg.assign(formatWxString(_("Failed to apply patches for graphic pack \'{}\'"), m_gp->GetName()));
 	}
 	else
 	{
@@ -54,7 +55,7 @@ void PatchErrorHandler::showStageErrorMessageBox()
 	if (cemuLog_isLoggingEnabled(LogType::Patches))
 	{
 		errorMsg.append("\n \n")
-			.append(_tr("Details:"))
+			.append(_("Details:"))
 			.append("\n");
 		for (auto& itr : errorMessages)
 		{
@@ -63,7 +64,7 @@ void PatchErrorHandler::showStageErrorMessageBox()
 		}
 	}
 
-	WindowSystem::ShowErrorDialog(errorMsg, _tr("Graphic pack error"), WindowSystem::ErrorCategory::GRAPHIC_PACKS);
+	wxMessageBox(errorMsg, _("Graphic pack error"));
 }
 
 // loads Cemu-style patches (patch_<anything>.asm)
@@ -172,7 +173,7 @@ void GraphicPack2::ApplyPatchesForModule(const RPLModule* rpl)
 	std::vector<PatchGroup*> list_groups;
 	for (auto itr : list_patchGroups)
 	{
-		if (itr->matchesCRC(rpl->patchCRC) || (itr->m_isRpxOnlyTarget && rpl->IsRPX()))
+		if (itr->matchesCRC(rpl->patchCRC))
 			list_groups.emplace_back(itr);
 	}
 	// apply all groups at once
@@ -188,7 +189,7 @@ void GraphicPack2::RevertPatchesForModule(const RPLModule* rpl)
 	std::vector<PatchGroup*> list_groups;
 	for (auto itr : list_patchGroups)
 	{
-		if (itr->matchesCRC(rpl->patchCRC) || (itr->m_isRpxOnlyTarget && rpl->IsRPX()))
+		if (itr->matchesCRC(rpl->patchCRC))
 			list_groups.emplace_back(itr);
 	}
 	// undo all groups at once

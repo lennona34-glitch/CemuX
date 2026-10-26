@@ -1,7 +1,6 @@
 project(cemuMain)
 
 option(CEMU_CXX_FLAGS "Additional flags used for compiling Cemu source code")
-separate_arguments(CEMU_CXX_FLAGS NATIVE_COMMAND ${CEMU_CXX_FLAGS})
 if(CEMU_CXX_FLAGS)
 	add_compile_options(${CEMU_CXX_FLAGS})
 endif()
@@ -14,24 +13,18 @@ if(MSVC)
 	add_compile_definitions(WIN32_LEAN_AND_MEAN CURL_STATICLIB)
 elseif(UNIX)
 	if(APPLE)
-		if (ENABLE_VULKAN)
-			add_compile_definitions(
-				_XOPEN_SOURCE
-				VK_USE_PLATFORM_MACOS_MVK
-				VK_USE_PLATFORM_METAL_EXT
-			)
-		else()
-			add_compile_definitions(_XOPEN_SOURCE)
-		endif()
+		add_compile_definitions(
+			_XOPEN_SOURCE
+			VK_USE_PLATFORM_MACOS_MVK
+			VK_USE_PLATFORM_METAL_EXT
+		)
 	else()
-		if (ENABLE_VULKAN)
-			add_compile_definitions(
-				VK_USE_PLATFORM_XLIB_KHR # legacy. Do we need to support XLIB surfaces?
-				VK_USE_PLATFORM_XCB_KHR
-			)
-			if (ENABLE_WAYLAND)
-				add_compile_definitions(VK_USE_PLATFORM_WAYLAND_KHR)
-			endif()
+		add_compile_definitions(
+			VK_USE_PLATFORM_XLIB_KHR # legacy. Do we need to support XLIB surfaces?
+			VK_USE_PLATFORM_XCB_KHR
+		)
+		if (ENABLE_WAYLAND)
+			add_compile_definitions(VK_USE_PLATFORM_WAYLAND_KHR)
 		endif()
 	endif()
 	# warnings
@@ -42,16 +35,9 @@ elseif(UNIX)
     add_compile_options(-Wno-multichar -Wno-invalid-offsetof -Wno-switch -Wno-ignored-attributes -Wno-deprecated-enum-enum-conversion)
 endif()
 
-set(CMAKE_INCLUDE_CURRENT_DIR ON)
+add_compile_definitions(VK_NO_PROTOTYPES)
 
-# on msvc we can reuse the PCH from CemuCommon, on other platforms it's not straight forward to reuse the PCH so we opt out of it
-function(cemu_use_precompiled_header target_name)
-	if(MSVC)
-		target_precompile_headers(${target_name} REUSE_FROM CemuCommon)
-	else()
-		target_precompile_headers(${target_name} PRIVATE "${CMAKE_SOURCE_DIR}/src/Common/precompiled.h")
-	endif()
-endfunction()
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 add_subdirectory(Common)
 add_subdirectory(gui)
@@ -63,13 +49,12 @@ add_subdirectory(audio)
 add_subdirectory(util)
 add_subdirectory(imgui)
 add_subdirectory(resource)
+add_subdirectory(asm)
 
 add_executable(CemuBin
 	main.cpp
 	mainLLE.cpp
 )
-
-cemu_use_precompiled_header(CemuBin)
 
 if(MSVC AND MSVC_VERSION EQUAL 1940)
 	# workaround for an msvc issue on VS 17.10 where generated ILK files are too large
@@ -83,14 +68,6 @@ if(WIN32)
 	../dist/windows/cemu.manifest
 	)
 endif()
-
-if(APPLE AND CMAKE_GENERATOR STREQUAL "Xcode")
-    set_target_properties(CemuBin PROPERTIES
-        XCODE_ATTRIBUTE_ENABLE_DEBUG_DYLIB[variant=Debug] "YES"
-    )
-endif()
-
-string(TIMESTAMP CURRENT_YEAR "%Y" UTC)
 
 set_property(TARGET CemuBin PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set_property(TARGET CemuBin PROPERTY WIN32_EXECUTABLE $<NOT:$<CONFIG:Debug>>)
@@ -107,10 +84,10 @@ if (MACOS_BUNDLE)
 	set(MACOSX_BUNDLE_BUNDLE_NAME "Cemu")
 	set(MACOSX_BUNDLE_SHORT_VERSION_STRING "${EMULATOR_VERSION_MAJOR}.${EMULATOR_VERSION_MINOR}.${EMULATOR_VERSION_PATCH}")
 	set(MACOSX_BUNDLE_BUNDLE_VERSION "${EMULATOR_VERSION_MAJOR}.${EMULATOR_VERSION_MINOR}.${EMULATOR_VERSION_PATCH}")
-	set(MACOSX_BUNDLE_COPYRIGHT "Copyright © ${CURRENT_YEAR} Cemu Project")
+	set(MACOSX_BUNDLE_COPYRIGHT "Copyright © 2024 Cemu Project")
 
 	set(MACOSX_BUNDLE_CATEGORY "public.app-category.games")
- 	set(MACOSX_MINIMUM_SYSTEM_VERSION "13.4")
+ 	set(MACOSX_MINIMUM_SYSTEM_VERSION "12.0")
   	set(MACOSX_BUNDLE_TYPE_EXTENSION "wua")
 
 	set_target_properties(CemuBin PROPERTIES
@@ -121,78 +98,21 @@ if (MACOS_BUNDLE)
 	set(FOLDERS gameProfiles resources)
 	foreach(folder ${FOLDERS})
 		add_custom_command (TARGET CemuBin POST_BUILD
-			COMMAND ${CMAKE_COMMAND} ARGS -E copy_directory "${CMAKE_SOURCE_DIR}/bin/${folder}" "$<TARGET_BUNDLE_DIR:CemuBin>/Contents/SharedSupport/${folder}")
+			COMMAND ${CMAKE_COMMAND} ARGS -E copy_directory "${CMAKE_SOURCE_DIR}/bin/${folder}" "${CMAKE_SOURCE_DIR}/bin/${OUTPUT_NAME}.app/Contents/SharedSupport/${folder}")
 	endforeach(folder)
 
-	if (ENABLE_VULKAN)
-		if (EXISTS "/usr/local/lib/libMoltenVK.dylib")
-			set(MOLTENVK_PATH "/usr/local/lib/libMoltenVK.dylib")
-		elseif (EXISTS "/opt/homebrew/lib/libMoltenVK.dylib")
-			set(MOLTENVK_PATH "/opt/homebrew/lib/libMoltenVK.dylib")
-		else()
-			message(FATAL_ERROR "failed to find libMoltenVK.dylib")
-		endif ()
-  endif()
-  
-	if (ENABLE_LIBUSB)
-		if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-		    set(LIBUSB_PATH "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/lib/libusb-1.0.0.dylib")
-		else()
-		    set(LIBUSB_PATH "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libusb-1.0.0.dylib")
-		endif()
+	if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+	    set(LIBUSB_PATH "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-osx/debug/lib/libusb-1.0.0.dylib")
+	else()
+	    set(LIBUSB_PATH "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-osx/lib/libusb-1.0.0.dylib")
 	endif()
 
-	set(APP_BUNDLE_DIR "$<TARGET_BUNDLE_DIR:CemuBin>")
-	set(FRAMEWORKS_DIR "${APP_BUNDLE_DIR}/Contents/Frameworks")
-
-	if (ENABLE_VULKAN)
-		add_custom_command(TARGET CemuBin POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy 
-				"${MOLTENVK_PATH}"
-				"${FRAMEWORKS_DIR}/libMoltenVK.dylib"
-		)
-	endif()
-
-	if (ENABLE_LIBUSB)
-		add_custom_command(TARGET CemuBin POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy
-				"${LIBUSB_PATH}"
-				"${FRAMEWORKS_DIR}/libusb-1.0.0.dylib"
-		)
-	endif()
-
-	set_target_properties(CemuBin PROPERTIES
-		BUILD_WITH_INSTALL_RPATH TRUE
-		INSTALL_RPATH "@executable_path/../Frameworks"
-	)
-
-	if (ENABLE_LIBUSB)
-		add_custom_command(TARGET CemuBin POST_BUILD
-		COMMAND install_name_tool
-			-change @rpath/libusb-1.0.0.dylib
-				@executable_path/../Frameworks/libusb-1.0.0.dylib
-				"$<TARGET_FILE:CemuBin>"
-		)
-	endif()
-else()
-    if(APPLE)
-		if (ENABLE_VULKAN)
-			find_library(MOLTENVK_LIBRARY
-				NAMES MoltenVK moltenvk libMoltenVK.dylib
-				PATHS /usr/local/lib /opt/homebrew/lib
-			)
-			if(MOLTENVK_LIBRARY)
-				message(STATUS "Found MoltenVK: ${MOLTENVK_LIBRARY}")
-				target_link_libraries(CemuBin PRIVATE ${MOLTENVK_LIBRARY})
-			else()
-				message(WARNING "libMoltenVK.dylib not found")
-			endif()
-			set_target_properties(CemuBin PROPERTIES
-				BUILD_WITH_INSTALL_RPATH TRUE
-				INSTALL_RPATH "/usr/local/lib;/opt/homebrew/lib"
-			)
-		endif()
-    endif()
+	add_custom_command (TARGET CemuBin POST_BUILD
+		COMMAND ${CMAKE_COMMAND} ARGS -E copy "/usr/local/lib/libMoltenVK.dylib" "${CMAKE_SOURCE_DIR}/bin/${OUTPUT_NAME}.app/Contents/Frameworks/libMoltenVK.dylib"
+		COMMAND ${CMAKE_COMMAND} ARGS -E copy "${LIBUSB_PATH}" "${CMAKE_SOURCE_DIR}/bin/${OUTPUT_NAME}.app/Contents/Frameworks/libusb-1.0.0.dylib"
+		COMMAND ${CMAKE_COMMAND} ARGS -E copy "${CMAKE_SOURCE_DIR}/src/resource/update.sh" "${CMAKE_SOURCE_DIR}/bin/${OUTPUT_NAME}.app/Contents/MacOS/update.sh"
+		COMMAND bash -c "install_name_tool -add_rpath @executable_path/../Frameworks ${CMAKE_SOURCE_DIR}/bin/${OUTPUT_NAME}.app/Contents/MacOS/${OUTPUT_NAME}"
+		COMMAND bash -c "install_name_tool -change ${LIBUSB_PATH} @executable_path/../Frameworks/libusb-1.0.0.dylib ${CMAKE_SOURCE_DIR}/bin/${OUTPUT_NAME}.app/Contents/MacOS/${OUTPUT_NAME}")
 endif()
 
 set_target_properties(CemuBin PROPERTIES
@@ -201,10 +121,6 @@ set_target_properties(CemuBin PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../bin/$<1:>"
 	OUTPUT_NAME "${OUTPUT_NAME}"
 )
-
-if(ENABLE_SDL)
-	target_link_libraries(CemuBin PRIVATE SDL3::SDL3)
-endif()
 
 target_link_libraries(CemuBin PRIVATE
 	CemuAudio
@@ -215,6 +131,8 @@ target_link_libraries(CemuBin PRIVATE
 	CemuGui
 	CemuInput
 	CemuUtil
+	OpenGL::GL
+	SDL2::SDL2
 )
 
 if(UNIX AND NOT APPLE)
@@ -226,6 +144,6 @@ if(UNIX AND NOT APPLE)
 	target_link_options(CemuBin PRIVATE "$<$<CONFIG:Release>:-Xlinker;--strip-debug>")
 endif()
 
-if (BSD)
-	target_link_libraries(CemuBin PRIVATE execinfo SPIRV-Tools SPIRV-Tools-opt)
+if (ENABLE_WXWIDGETS)
+	target_link_libraries(CemuBin PRIVATE wx::base wx::core)
 endif()

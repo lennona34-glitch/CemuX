@@ -59,6 +59,7 @@ namespace H264
 		};
 
 		virtual void Init(bool isBufferedMode) = 0;
+		virtual void Destroy() = 0;
 
 		void QueueForDecode(uint8* data, uint32 length, double timestamp, void* imagePtr)
 		{

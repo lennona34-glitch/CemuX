@@ -9,11 +9,9 @@
 #include "Cafe/HW/Latte/Core/LatteCachedFBO.h"
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
 #include "Cafe/HW/Latte/Core/LattePerformanceMonitor.h"
-#include "util/highresolutiontimer/HighResolutionTimer.h"
 #include "Cafe/GraphicPack/GraphicPack2.h"
-#include "HW/Latte/Renderer/RendererCore.h"
 #include "config/ActiveSettings.h"
-#include "WindowSystem.h"
+#include "gui/guiWrapper.h"
 #include "Cafe/OS/libs/erreula/erreula.h"
 #include "input/InputManager.h"
 #include "Cafe/OS/libs/swkbd/swkbd.h"
@@ -326,17 +324,22 @@ LatteTextureView* LatteMRT::GetColorAttachmentTexture(uint32 index, bool createN
 // get mask of all used color buffers
 uint8 LatteMRT::GetActiveColorBufferMask(const LatteDecompilerShader* pixelShader, const LatteContextRegister& lcr)
 {
-	if (!pixelShader) [[unlikely]]
-		return 0;
 	const uint32* regView = lcr.GetRawView();
+
+	uint8 colorBufferMask = 0;
+	for (uint32 i = 0; i < 8; i++)
+	{
+		if (regView[mmCB_COLOR0_BASE + i] != MPTR_NULL)
+			colorBufferMask |= (1 << i);
+	}
 	// check if color buffer output is active
 	const Latte::LATTE_CB_COLOR_CONTROL& colorControlReg = lcr.CB_COLOR_CONTROL;
 	uint32 colorBufferDisable = colorControlReg.get_SPECIAL_OP() == Latte::LATTE_CB_COLOR_CONTROL::E_SPECIALOP::DISABLE;
 	if (colorBufferDisable)
 		return 0;
 	cemu_assert_debug(colorControlReg.get_DEGAMMA_ENABLE() == false); // not supported
-	// start with color buffer mask from pixel shader output
-	uint8 colorBufferMask = pixelShader->pixelColorOutputMask;
+	// combine color buffer mask with pixel output mask from pixel shader
+	colorBufferMask &= (pixelShader ? pixelShader->pixelColorOutputMask : 0);
 	// combine color buffer mask with color channel mask from mmCB_TARGET_MASK (disable render buffer if all colors are blocked)
 	uint32 channelTargetMask = lcr.CB_TARGET_MASK.get_MASK();
 	for (uint32 i = 0; i < 8; i++)
@@ -344,9 +347,9 @@ uint8 LatteMRT::GetActiveColorBufferMask(const LatteDecompilerShader* pixelShade
 		if (((channelTargetMask >> (i * 4)) & 0xF) == 0)
 			colorBufferMask &= ~(1 << i);
 	}
+
 	// render targets smaller than the scissor size are not allowed
 	// this fixes a few render issues in Cemu but we dont know if this matches HW behavior
-	// also check for color buffers without a valid pointer
 	cemu_assert_debug(lcr.PA_SC_GENERIC_SCISSOR_TL.get_WINDOW_OFFSET_DISABLE() == true); // todo (not exposed by GX2 API)
 	uint32 scissorAccessWidth = lcr.PA_SC_GENERIC_SCISSOR_BR.get_BR_X();
 	uint32 scissorAccessHeight = lcr.PA_SC_GENERIC_SCISSOR_BR.get_BR_Y();
@@ -354,8 +357,6 @@ uint8 LatteMRT::GetActiveColorBufferMask(const LatteDecompilerShader* pixelShade
 	{
 		if( (colorBufferMask&(1<<i)) == 0 )
 			continue;
-		if (regView[mmCB_COLOR0_BASE + i] == MPTR_NULL) [[unlikely]]
-			colorBufferMask &= ~(1 << i);
 		// get width/height
 		uint32 regColorSize = regView[mmCB_COLOR0_SIZE + i];
 		uint32 regColorInfo = regView[mmCB_COLOR0_INFO + i];
@@ -367,12 +368,15 @@ uint8 LatteMRT::GetActiveColorBufferMask(const LatteDecompilerShader* pixelShade
 		uint32 colorBufferHeight = pitchHeight / colorBufferPitch;
 		uint32 colorBufferWidth = colorBufferPitch;
 
-		if ((colorBufferWidth < (sint32)scissorAccessWidth) || (colorBufferHeight < (sint32)scissorAccessHeight))
+		if ((colorBufferWidth < (sint32)scissorAccessWidth) ||
+			(colorBufferHeight < (sint32)scissorAccessHeight))
 		{
             // log this?
 			colorBufferMask &= ~(1<<i);
 		}
+
 	}
+
 	return colorBufferMask;
 }
 
@@ -444,6 +448,14 @@ bool LatteMRT::UpdateCurrentFBO()
 	LatteDecompilerShader* pixelShader = LatteSHRC_GetActivePixelShader();
 	uint8 colorBufferMask = GetActiveColorBufferMask(pixelShader, LatteGPUState.contextNew);
 	bool depthBufferMask = GetActiveDepthBufferMask(LatteGPUState.contextNew);
+
+	// if depth test is not used then detach the depth buffer
+	bool depthEnable = LatteGPUState.contextNew.DB_DEPTH_CONTROL.get_Z_ENABLE();
+	bool stencilTestEnable = LatteGPUState.contextNew.DB_DEPTH_CONTROL.get_STENCIL_ENABLE();
+	bool backStencilEnable = LatteGPUState.contextNew.DB_DEPTH_CONTROL.get_BACK_STENCIL_ENABLE();
+
+	if (!depthEnable && !stencilTestEnable && !backStencilEnable)
+		depthBufferMask = false;
 
 	bool hasResizedTexture = false; // set to true if any of the color buffers or the depth buffer reference a resized texture (via graphic pack texture rules)
 	sLatteRenderTargetState.renderTargetIsResized = false;
@@ -683,7 +695,6 @@ void LatteRenderTarget_itHLESwapScanBuffer()
 	if(LatteGPUState.frameCounter > 5)
 		performanceMonitor.gpuTime_frameTime.endMeasuring();
 	LattePerformanceMonitor_frameEnd();
-	FrameBenchmarkHelper::FrameEnd();
 	LatteGPUState.frameCounter++;
 	g_renderer->SwapBuffers(true, true);
 
@@ -691,10 +702,7 @@ void LatteRenderTarget_itHLESwapScanBuffer()
 	performanceMonitor.gpuTime_frameTime.beginMeasuring();
 
 	LatteTC_CleanupUnusedTextures();
-	LatteSHRC_CleanupShaderStateCache();
-#ifdef ENABLE_OPENGL
 	LatteDraw_cleanupAfterFrame();
-#endif
 	LatteQuery_CancelActiveGPU7Queries();
 	LatteBufferCache_notifySwapTVScanBuffer();
 	LattePerformanceMonitor_frameBegin();
@@ -715,8 +723,8 @@ void LatteRenderTarget_applyTextureColorClear(LatteTexture* texture, uint32 slic
 
 void LatteRenderTarget_applyTextureDepthClear(LatteTexture* texture, uint32 sliceIndex, uint32 mipIndex, bool hasDepthClear, bool hasStencilClear, float depthValue, uint8 stencilValue, uint64 eventCounter)
 {
-	if(texture->isDepth)
-	{
+	if(texture->isDepth)	
+	{ 
 		g_renderer->texture_clearDepthSlice(texture, sliceIndex, mipIndex, hasDepthClear, hasStencilClear, depthValue, stencilValue);
 	}
 	else
@@ -830,10 +838,10 @@ sint32 _currentOutputImageHeight = 0;
 void LatteRenderTarget_getScreenImageArea(sint32* x, sint32* y, sint32* width, sint32* height, sint32* fullWidth, sint32* fullHeight, bool padView)
 {
 	int w, h;
-	if(padView && WindowSystem::IsPadWindowOpen())
-		WindowSystem::GetPadWindowPhysSize(w, h);
+	if(padView && gui_isPadWindowOpen())
+		gui_getPadWindowPhysSize(w, h);
 	else
-		WindowSystem::GetWindowPhysSize(w, h);
+		gui_getWindowPhysSize(w, h);
 
 	sint32 scaledOutputX;
 	sint32 scaledOutputY;
@@ -875,7 +883,7 @@ void LatteRenderTarget_copyToBackbuffer(LatteTextureView* textureView, bool isPa
 	textureView->baseTexture->GetEffectiveSize(effectiveWidth, effectiveHeight, 0);
 	_currentOutputImageWidth = effectiveWidth;
 	_currentOutputImageHeight = effectiveHeight;
-
+	
 	sint32 imageX, imageY;
 	sint32 imageWidth, imageHeight;
 	sint32 fullscreenWidth, fullscreenHeight;
@@ -991,8 +999,8 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
 		return {pressed && !toggle, pressed && toggle};
 	};
 
-	const bool tabPressed = WindowSystem::IsKeyDown(WindowSystem::PlatformKeyCodes::TAB);
-	const bool ctrlPressed = WindowSystem::IsKeyDown(WindowSystem::PlatformKeyCodes::LCONTROL);
+	const bool tabPressed = gui_isKeyDown(PlatformKeyCodes::TAB);
+	const bool ctrlPressed = gui_isKeyDown(PlatformKeyCodes::LCONTROL);
 	const auto [vpad0Active, vpad0Toggle] = getVPADScreenActive(0);
 	const auto [vpad1Active, vpad1Toggle] = getVPADScreenActive(1);
 
@@ -1029,7 +1037,7 @@ void LatteRenderTarget_updateViewport()
 	float vpX = LatteGPUState.contextNew.PA_CL_VPORT_XOFFSET.get_OFFSET() - LatteGPUState.contextNew.PA_CL_VPORT_XSCALE.get_SCALE();
 	float vpHeight = LatteGPUState.contextNew.PA_CL_VPORT_YSCALE.get_SCALE() / -0.5f;
 	float vpY = LatteGPUState.contextNew.PA_CL_VPORT_YOFFSET.get_OFFSET() + LatteGPUState.contextNew.PA_CL_VPORT_YSCALE.get_SCALE();
-
+	
 	bool halfZ = LatteGPUState.contextNew.PA_CL_CLIP_CNTL.get_DX_CLIP_SPACE_DEF();
 
 	// calculate near/far

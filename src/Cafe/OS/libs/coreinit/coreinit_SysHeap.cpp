@@ -7,7 +7,6 @@ namespace coreinit
 	coreinit::MEMHeapHandle _sysHeapHandle = MPTR_NULL;
 	sint32 _sysHeapAllocCounter = 0;
 	sint32 _sysHeapFreeCounter = 0;
-	MEMPTR<void> heapBaseAddress = nullptr;
 
 	void* OSAllocFromSystem(uint32 size, uint32 alignment)
 	{
@@ -24,8 +23,7 @@ namespace coreinit
 	void InitSysHeap()
 	{
 		uint32 sysHeapSize = 8 * 1024 * 1024; // actual size is unknown
-		if (!heapBaseAddress)
-			heapBaseAddress = memory_getPointerFromVirtualOffset(coreinit_allocFromSysArea(sysHeapSize, 0x1000));
+		MEMPTR<void> heapBaseAddress = memory_getPointerFromVirtualOffset(coreinit_allocFromSysArea(sysHeapSize, 0x1000));
 		_sysHeapHandle = coreinit::MEMCreateExpHeapEx(heapBaseAddress.GetPtr(), sysHeapSize, MEM_HEAP_OPTION_THREADSAFE);
 		_sysHeapAllocCounter = 0;
 		_sysHeapFreeCounter = 0;
@@ -33,8 +31,8 @@ namespace coreinit
 
 	void InitializeSysHeap()
 	{
-		cafeExportRegister("coreinit", OSAllocFromSystem, LogType::CoreinitMem);
-		cafeExportRegister("coreinit", OSFreeToSystem, LogType::CoreinitMem);
+		cafeExportRegister("h264", OSAllocFromSystem, LogType::CoreinitMem);
+		cafeExportRegister("h264", OSFreeToSystem, LogType::CoreinitMem);
 	}
 
 }

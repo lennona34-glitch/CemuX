@@ -7,7 +7,11 @@ add_library(CemuAudio
 
 set_property(TARGET CemuAudio PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-cemu_use_precompiled_header(CemuAudio)
+# move these to UI folder
+target_sources(CemuAudio PRIVATE
+	audioDebuggerWindow.cpp
+	audioDebuggerWindow.h
+)
 
 if(WIN32)
 	target_sources(CemuAudio PRIVATE
@@ -33,11 +37,19 @@ endif()
 target_include_directories(CemuAudio PUBLIC "../")
 
 target_link_libraries(CemuAudio PRIVATE
+	CemuCafe
 	CemuCommon
+	CemuConfig
 	CemuGui
+	CemuUtil
 )
 
 if(ENABLE_CUBEB)
 	# PUBLIC because cubeb.h/cubeb.h is included in CubebAPI.h
 	target_link_libraries(CemuAudio PUBLIC cubeb::cubeb)
+endif()
+
+if (ENABLE_WXWIDGETS)
+	# PUBLIC because wx/wx.h is included in audioDebuggerWindow.h
+	target_link_libraries(CemuAudio PUBLIC wx::base wx::core)
 endif()

@@ -1,6 +1,7 @@
 #include "Cemu/Tools/DownloadManager/DownloadManager.h"
 
 #include "Cafe/Account/Account.h"
+#include "gui/CemuApp.h"
 #include "util/crypto/md5.h"
 #include "Cafe/TitleList/TitleId.h"
 #include "Common/FileStream.h"
@@ -9,6 +10,7 @@
 #include "config/ActiveSettings.h"
 #include "util/ThreadPool/ThreadPool.h"
 #include "util/helpers/enum_array.hpp"
+#include "gui/MainWindow.h"
 
 #include "Cafe/Filesystem/FST/FST.h"
 #include "Cafe/TitleList/TitleList.h"
@@ -18,7 +20,7 @@
 #include <curl/curl.h>
 #include <pugixml.hpp>
 
-#include "WindowSystem.h"
+#include "gui/helpers/wxHelpers.h"
 
 #include "Cemu/napi/napi.h"
 #include "util/helpers/Serializer.h"
@@ -283,7 +285,7 @@ void DownloadManager::loadTicketCache()
 			return;
 		}
 		uint64 ticketId = memReader.readBE<uint64>();
-		uint32 ticketVersion = memReader.readBE<uint32>();
+		uint64 ticketVersion = memReader.readBE<uint32>();
 		std::vector<uint8> eTicketData = memReader.readPODVector<uint8>();
 		std::vector<std::vector<uint8>> eTicketCerts;
 		uint8 certCount = memReader.readBE<uint8>();
@@ -331,7 +333,7 @@ bool DownloadManager::syncAccountTickets()
 	for (auto& tiv : resultTicketIds.tivs)
 	{
 		index++;
-		std::string msg = _tr("Downloading account ticket");
+		std::string msg = _("Downloading account ticket").utf8_string();
 		msg.append(fmt::format(" {0}/{1}", index, count));
 		setStatusMessage(msg, DLMGR_STATUS_CODE::CONNECTING);
 		// skip if already cached
@@ -384,7 +386,7 @@ bool DownloadManager::syncAccountTickets()
 
 bool DownloadManager::syncSystemTitleTickets()
 {
-	setStatusMessage(_tr("Downloading system tickets..."), DLMGR_STATUS_CODE::CONNECTING);
+	setStatusMessage(_("Downloading system tickets...").utf8_string(), DLMGR_STATUS_CODE::CONNECTING);
 	NAPI::AuthInfo authInfo = GetAuthInfo(true);
 	auto querySystemTitleTicket = [&](uint64 titleId) -> void
 	{
@@ -434,7 +436,7 @@ bool DownloadManager::syncSystemTitleTickets()
 // build list of updates for which either an installed game exists or the base title ticket is cached
 bool DownloadManager::syncUpdateTickets()
 {
-	setStatusMessage(_tr("Retrieving update information..."), DLMGR_STATUS_CODE::CONNECTING);
+	setStatusMessage(_("Retrieving update information...").utf8_string(), DLMGR_STATUS_CODE::CONNECTING);
 	// download update version list
 	downloadTitleVersionList();
 	if (!m_hasTitleVersionList)
@@ -456,7 +458,7 @@ bool DownloadManager::syncUpdateTickets()
 		if (titleIdParser.GetType() != TitleIdParser::TITLE_TYPE::BASE_TITLE_UPDATE)
 			continue;
 
-		std::string msg = _tr("Downloading ticket");
+		std::string msg = _("Downloading ticket").utf8_string();
 		msg.append(fmt::format(" {0}/{1}", updateIndex, numUpdates));
 		updateIndex++;
 		setStatusMessage(msg, DLMGR_STATUS_CODE::CONNECTING);
@@ -508,12 +510,12 @@ bool DownloadManager::syncTicketCache()
 	for (auto& ticketInfo : m_ticketCache)
 	{
 		index++;
-		std::string msg = _tr("Downloading meta data");
+		std::string msg = _("Downloading meta data").utf8_string();
 		msg.append(fmt::format(" {0}/{1}", index, count));
 		setStatusMessage(msg, DLMGR_STATUS_CODE::CONNECTING);
 		prepareIDBE(ticketInfo.titleId);
 	}
-	setStatusMessage(_tr("Connected. Right click entries in the list to start downloading"), DLMGR_STATUS_CODE::CONNECTED);
+	setStatusMessage(_("Connected. Right click entries in the list to start downloading").utf8_string(), DLMGR_STATUS_CODE::CONNECTED);
 	return true;
 }
 
@@ -599,7 +601,7 @@ void DownloadManager::_handle_connect()
 	// reset login state
 	m_iasToken.serviceAccountId.clear();
 	m_iasToken.deviceToken.clear();
-	setStatusMessage(_tr("Logging in..."), DLMGR_STATUS_CODE::CONNECTING);
+	setStatusMessage(_("Logging in...").utf8_string(), DLMGR_STATUS_CODE::CONNECTING);
 	// retrieve ECS AccountId + DeviceToken from cache
 	if (s_nupFileCache)
 	{
@@ -622,7 +624,7 @@ void DownloadManager::_handle_connect()
 			cemuLog_log(LogType::Force, "Failed to request IAS token");
 			cemu_assert_debug(false);
 			m_connectState.store(CONNECT_STATE::FAILED);
-			setStatusMessage(_tr("Login failed. Outdated or incomplete online files?"), DLMGR_STATUS_CODE::FAILED);
+			setStatusMessage(_("Login failed. Outdated or incomplete online files?").utf8_string(), DLMGR_STATUS_CODE::FAILED);
 			return;
 		}
 	}
@@ -630,16 +632,16 @@ void DownloadManager::_handle_connect()
 	if (!_connect_queryAccountStatusAndServiceURLs())
 	{
 		m_connectState.store(CONNECT_STATE::FAILED);
-		setStatusMessage(_tr("Failed to query account status"), DLMGR_STATUS_CODE::FAILED);
+		setStatusMessage(_("Failed to query account status").utf8_string(), DLMGR_STATUS_CODE::FAILED);
 		return;
 	}
 	// load ticket cache and sync
-	setStatusMessage(_tr("Updating ticket cache"), DLMGR_STATUS_CODE::CONNECTING);
+	setStatusMessage(_("Updating ticket cache").utf8_string(), DLMGR_STATUS_CODE::CONNECTING);
 	loadTicketCache();
 	if (!syncTicketCache())
 	{
 		m_connectState.store(CONNECT_STATE::FAILED);
-		setStatusMessage(_tr("Failed to request tickets"), DLMGR_STATUS_CODE::FAILED);
+		setStatusMessage(_("Failed to request tickets").utf8_string(), DLMGR_STATUS_CODE::FAILED);
 		return;
 	}
 	searchForIncompleteDownloads();
@@ -1004,7 +1006,7 @@ void DownloadManager::asyncPackageDownloadTMD(Package* package)
 	std::unique_lock<std::recursive_mutex> _l(m_mutex);
 	if (!tmdResult.isValid)
 	{
-		setPackageError(package, _tr("TMD download failed"));
+		setPackageError(package, _("TMD download failed").utf8_string());
 		package->state.isDownloadingTMD = false;
 		return;
 	}
@@ -1013,7 +1015,7 @@ void DownloadManager::asyncPackageDownloadTMD(Package* package)
 	NCrypto::TMDParser tmdParser;
 	if (!tmdParser.parse(tmdResult.tmdData.data(), tmdResult.tmdData.size()))
 	{
-		setPackageError(package, _tr("Invalid TMD"));
+		setPackageError(package, _("Invalid TMD").utf8_string());
 		package->state.isDownloadingTMD = false;
 		return;
 	}
@@ -1122,7 +1124,7 @@ void DownloadManager::asyncPackageDownloadContentFile(Package* package, uint16 i
 				size_t bytesWritten = callbackInfo->receiveBuffer.size();
 				if (callbackInfo->fileOutput->writeData(callbackInfo->receiveBuffer.data(), callbackInfo->receiveBuffer.size()) != (uint32)callbackInfo->receiveBuffer.size())
 				{
-					callbackInfo->downloadMgr->setPackageError(callbackInfo->package, _tr("Cannot write file. Disk full?"));
+					callbackInfo->downloadMgr->setPackageError(callbackInfo->package, _("Cannot write file. Disk full?").utf8_string());
 					return false;
 				}
 				callbackInfo->receiveBuffer.clear();
@@ -1143,12 +1145,12 @@ void DownloadManager::asyncPackageDownloadContentFile(Package* package, uint16 i
 	callbackInfoData.fileOutput = FileStream::createFile2(packageDownloadPath / fmt::format("{:08x}.app", contentId));
 	if (!callbackInfoData.fileOutput)
 	{
-		setPackageError(package, _tr("Cannot create file"));
+		setPackageError(package, _("Cannot create file").utf8_string());
 		return;
 	}
 	if (!NAPI::CCS_GetContentFile(GetDownloadMgrNetworkService(), titleId, contentId, CallbackInfo::writeCallback, &callbackInfoData))
 	{
-		setPackageError(package, _tr("Download failed"));
+		setPackageError(package, _("Download failed").utf8_string());
 		delete callbackInfoData.fileOutput;
 		return;
 	}
@@ -1403,7 +1405,7 @@ void DownloadManager::asyncPackageInstall(Package* package)
 	reportPackageStatus(package);
 	checkPackagesState();
 	// lastly request game list to be refreshed
-	WindowSystem::RefreshGameList();
+	MainWindow::RequestGameListRefresh();
 	return;
 }
 

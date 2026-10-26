@@ -1,14 +1,15 @@
 #include "Cafe/OS/common/OSCommon.h"
-#include "Cafe/OS/libs/coreinit/coreinit_FS.h"
+#include "Cafe/HW/Latte/ISA/RegDefines.h"
 #include "Cafe/OS/libs/gx2/GX2.h"
+#include "Cafe/HW/Latte/Core/Latte.h"
+#include "Cafe/HW/Latte/Core/LatteDraw.h"
+
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
 
 #include <imgui.h>
 #include "imgui/imgui_extension.h"
 #include "util/helpers/helpers.h"
 #include "resource/IconsFontAwesome5.h"
-
-constinit COSStaticData s_swkbdStaticData;
 
 #define SWKBD_FORM_STRING_MAX_LENGTH	(4096) // counted in 16-bit characters
 
@@ -72,7 +73,7 @@ typedef struct
 	wchar_t formStringBuffer[SWKBD_FORM_STRING_MAX_LENGTH];
 	sint32 formStringLength;
 	// big endian version of the string buffer (converted whenever GetInputFormString is called)
-	uint16be formStringBufferBE[SWKBD_FORM_STRING_MAX_LENGTH];
+	uint16 formStringBufferBE[SWKBD_FORM_STRING_MAX_LENGTH];
 	bool isActive; // set when SwkbdAppearInputForm() is called
 	//bool isDisplayed; // set when keyboard is rendering
 	bool decideButtonWasPressed; // set to false when keyboard appears, and set to true when enter is pressed. Remains on true after the keyboard is disappeared (todo: Investigate how this really works)
@@ -85,36 +86,38 @@ typedef struct
 	bool shiftActivated;
 	bool returnState;
 	bool cancelState;
+	
 }swkbdInternalState_t;
 
-sint32 isNeedCalcSubThreadFont = 0;
-sint32 isNeedCalcSubThreadPredict = 0;
+swkbdInternalState_t* swkbdInternalState = NULL;
 
-CafeStaticVar<swkbdInternalState_t> swkbdInternalState{s_swkbdStaticData};
-
-void SwkbdCreate(uint8* workMemory, uint32 regionType, uint32 unk, coreinit::FSClient_t* fsClient)
+void swkbdExport_SwkbdCreate(PPCInterpreter_t* hCPU)
 {
-	memset(swkbdInternalState.GetPtr(), 0, sizeof(swkbdInternalState_t));
-	coreinit::OSSleepTicks(ESPRESSO_TIMER_CLOCK); // simulate this function taking a bit of time to run. MH3U/MH3G requires this to not softlock
-	// pretend that there is some work to do
-	isNeedCalcSubThreadFont = 3;
-	isNeedCalcSubThreadPredict = 3;
+	cemuLog_logDebug(LogType::Force, "swkbd.SwkbdCreate(0x{:08x},0x{:08x},0x{:08x},0x{:08x})", hCPU->gpr[3], hCPU->gpr[4], hCPU->gpr[5], hCPU->gpr[6]);
+	if( swkbdInternalState == NULL )
+	{
+		MPTR swkbdInternalStateMPTR = coreinit_allocFromSysArea(sizeof(swkbdInternalState_t), 4);
+		swkbdInternalState = (swkbdInternalState_t*)memory_getPointerFromVirtualOffset(swkbdInternalStateMPTR);
+		memset(swkbdInternalState, 0x00, sizeof(swkbdInternalState_t));
+	}
+	osLib_returnFromFunction(hCPU, 0); // should return true?
 }
 
-uint32 SwkbdGetStateKeyboard()
+void swkbdExport_SwkbdGetStateKeyboard(PPCInterpreter_t* hCPU)
 {
 	uint32 r = SWKBD_STATE_BLANK;
 	if( swkbdInternalState->isActive )
 		r = SWKBD_STATE_DISPLAYED;
-	return r;
+	osLib_returnFromFunction(hCPU, r);
 }
 
-uint32 SwkbdGetStateInputForm()
+void swkbdExport_SwkbdGetStateInputForm(PPCInterpreter_t* hCPU)
 {
+	//debug_printf("SwkbdGetStateInputForm__3RplFv LR: %08x\n", hCPU->sprNew.LR);
 	uint32 r = SWKBD_STATE_BLANK;
 	if( swkbdInternalState->isActive )
 		r = SWKBD_STATE_DISPLAYED;
-	return r;
+	osLib_returnFromFunction(hCPU, r);
 }
 
 //ReceiverArg:
@@ -138,25 +141,34 @@ uint32 SwkbdGetStateInputForm()
 //	+0x0C	functionPtr onDirtyString(const DirtyInfo& info) = 0; ->DirtyInfo is just two DWORDs.From and to ?
 //	?
 
-struct swkdbIEventReceiver_t
+
+typedef struct  
 {
 	MPTR vTable; // guessed
-};
+}swkdbIEventReceiver_t;
 
-struct swkdbIEventReceiverVTable_t
+typedef struct  
 {
 	uint32 ukn00;
 	uint32 ukn04;
 	uint32 ukn08;
 	MPTR   onDirtyString;
-};
+}swkdbIEventReceiverVTable_t;
 
-uint32 SwkbdSetReceiver(const swkbdReceiverArg_t* receiverArg)
+void swkbdExport_SwkbdSetReceiver(PPCInterpreter_t* hCPU)
 {
+	debug_printf("SwkbdSetReceiver(0x%08x)\n", hCPU->gpr[3]);
+	swkbdReceiverArg_t* receiverArg = (swkbdReceiverArg_t*)memory_getPointerFromVirtualOffset(hCPU->gpr[3]);
+
 	if(swkbdInternalState == nullptr)
-		return 0;
+	{
+		osLib_returnFromFunction(hCPU, 0);
+		return;
+	}
+
 	swkbdInternalState->keyboardArg.receiverArg = *receiverArg;
-	return 0;
+
+	osLib_returnFromFunction(hCPU, 0);
 }
 
 typedef struct  
@@ -184,12 +196,15 @@ typedef struct
 	/* +0xC8 */ MEMPTR<uint16be> initialText;
 	/* +0xCC */ MEMPTR<uint16be> infoText;
 	/* +0xD0 */ uint32be maxTextLength;
+
 }swkbdAppearArg_t;
 
 static_assert(offsetof(swkbdAppearArg_t, cursorIndex) == 0xC4, "appearArg.cursorIndex has invalid offset");
 
-uint32 SwkbdAppearInputForm(const swkbdAppearArg_t* appearArg)
+void swkbdExport_SwkbdAppearInputForm(PPCInterpreter_t* hCPU)
 {
+	ppcDefineParamStructPtr(appearArg, swkbdAppearArg_t, 0);
+	cemuLog_logDebug(LogType::Force, "SwkbdAppearInputForm__3RplFRCQ3_2nn5swkbd9AppearArg");
 	swkbdInternalState->formStringLength = 0;
 	swkbdInternalState->isActive = true;
 	swkbdInternalState->decideButtonWasPressed = false;
@@ -220,13 +235,16 @@ uint32 SwkbdAppearInputForm(const swkbdAppearArg_t* appearArg)
 		swkbdInternalState->formStringBuffer[0] = '\0';
 		swkbdInternalState->formStringLength = 0;
 	}
-	return 1;
+	osLib_returnFromFunction(hCPU, 1);
 }
 
-uint32 SwkbdAppearKeyboard(const SwkbdKeyboardArg_t* keyboardArg)
+void swkbdExport_SwkbdAppearKeyboard(PPCInterpreter_t* hCPU)
 {
 	// todo: Figure out what the difference between AppearInputForm and AppearKeyboard is?
-	uint32 argPtr = MEMPTR(keyboardArg).GetMPTR();
+	cemuLog_logDebug(LogType::Force, "SwkbdAppearKeyboard__3RplFRCQ3_2nn5swkbd11KeyboardArg");
+	SwkbdKeyboardArg_t* keyboardArg = (SwkbdKeyboardArg_t*)memory_getPointerFromVirtualOffset(hCPU->gpr[3]);
+
+	uint32 argPtr = hCPU->gpr[3];
 	for(sint32 i=0; i<0x180; i += 4)
 	{
 		debug_printf("+0x%03x: 0x%08x\n", i, memory_readU32(argPtr+i));
@@ -239,37 +257,39 @@ uint32 SwkbdAppearKeyboard(const SwkbdKeyboardArg_t* keyboardArg)
 	swkbdInternalState->formStringBuffer[0] = '\0';
 	swkbdInternalState->formStringLength = 0;
 	swkbdInternalState->keyboardArg = *keyboardArg;
-	return 1;
+	osLib_returnFromFunction(hCPU, 1);
 }
 
-uint32 SwkbdDisappearInputForm()
+void swkbdExport_SwkbdDisappearInputForm(PPCInterpreter_t* hCPU)
 {
-	debug_printf("SwkbdDisappearInputForm__3RplFv\n");
+	debug_printf("SwkbdDisappearInputForm__3RplFv LR: %08x\n", hCPU->spr.LR);
 	swkbdInternalState->isActive = false;
-	return 1;
+	osLib_returnFromFunction(hCPU, 1);
 }
 
-uint32 SwkbdDisappearKeyboard()
+void swkbdExport_SwkbdDisappearKeyboard(PPCInterpreter_t* hCPU)
 {
-	debug_printf("SwkbdDisappearKeyboard__3RplFv\n");
+	debug_printf("SwkbdDisappearKeyboard__3RplFv LR: %08x\n", hCPU->spr.LR);
 	swkbdInternalState->isActive = false;
-	return 1;
+	osLib_returnFromFunction(hCPU, 1);
 }
 
-uint16be* SwkbdGetInputFormString()
+void swkbdExport_SwkbdGetInputFormString(PPCInterpreter_t* hCPU)
 {
 	for(sint32 i=0; i<swkbdInternalState->formStringLength; i++)
-		swkbdInternalState->formStringBufferBE[i] = swkbdInternalState->formStringBuffer[i];
-	cemu_assert(swkbdInternalState->formStringLength < SWKBD_FORM_STRING_MAX_LENGTH);
-	swkbdInternalState->formStringBufferBE[swkbdInternalState->formStringLength] = 0;
-	return swkbdInternalState->formStringBufferBE;
+	{
+		swkbdInternalState->formStringBufferBE[i] = _swapEndianU16(swkbdInternalState->formStringBuffer[i]);
+	}
+	swkbdInternalState->formStringBufferBE[swkbdInternalState->formStringLength] = '\0';
+	osLib_returnFromFunction(hCPU, memory_getVirtualOffsetFromPointer(swkbdInternalState->formStringBufferBE));
 }
 
-uint32 SwkbdIsDecideOkButton(uint8*)
+void swkbdExport_SwkbdIsDecideOkButton(PPCInterpreter_t* hCPU)
 {
 	if (swkbdInternalState->decideButtonWasPressed)
-		return 1;
-	return 0;
+		osLib_returnFromFunction(hCPU, 1);
+	else
+		osLib_returnFromFunction(hCPU, 0);
 }
 
 typedef struct  
@@ -286,9 +306,10 @@ typedef struct
 
 static_assert(sizeof(SwkbdDrawStringInfo_t) != 0x19, "SwkbdDrawStringInfo_t has invalid size");
 
-uint32 SwkbdGetDrawStringInfo(SwkbdDrawStringInfo_t* drawStringInfo)
+void swkbdExport_SwkbdGetDrawStringInfo(PPCInterpreter_t* hCPU)
 {
-	cemuLog_logDebug(LogType::Force, "SwkbdGetDrawStringInfo(0x{:08x})", MEMPTR(drawStringInfo).GetMPTR());
+	cemuLog_logDebug(LogType::Force, "SwkbdGetDrawStringInfo(0x{:08x})", hCPU->gpr[3]);
+	ppcDefineParamStructPtr(drawStringInfo, SwkbdDrawStringInfo_t, 0);
 
 	drawStringInfo->ukn00 = -1;
 	drawStringInfo->ukn04 = -1;
@@ -298,100 +319,34 @@ uint32 SwkbdGetDrawStringInfo(SwkbdDrawStringInfo_t* drawStringInfo)
 	drawStringInfo->ukn14 = -1;
 	drawStringInfo->ukn18 = 0;
 
-	return 0;
+	osLib_returnFromFunction(hCPU, 0);
 }
 
-constexpr uint32 SWKBD_LEARN_DIC_SIZE = 0xA460;
-constexpr uint32 SWKBD_LEARN_DIC_ENTRY_COUNT = 1000;
-constexpr uint32 SWKBD_LEARN_DIC_ENTRY_STRIDE = 0x20;
-constexpr uint32 SWKBD_LEARN_DIC_INDEX_COUNT = SWKBD_LEARN_DIC_ENTRY_COUNT + 1;
-constexpr uint32 SWKBD_LEARN_DIC_MAGIC = 0x4E4A4443; // "NJDC"
-
-struct SwkbdLearnDic
+void swkbdExport_SwkbdInitLearnDic(PPCInterpreter_t* hCPU)
 {
-	/* 0x00 */ uint32be magic;
-	/* 0x04 */ uint32be version;
-	/* 0x08 */ uint32be format;
-	/* 0x0C */ uint32be storageSize;
-	/* 0x10 */ uint32be metadataSize;
-	/* 0x14 */ uint32be maxWordLength;
-	/* 0x18 */ uint32be maxReadingLength;
-	/* 0x1C */ uint32be indexTableEnd;
-	/* 0x20 */ uint32be entryBaseOffset;
-	/* 0x24 */ uint32be reserved24;
-	/* 0x28 */ uint32be entryCount;
-	/* 0x2C */ uint32be entryStride;
-	/* 0x30 */ uint32be reserved30;
-	/* 0x34 */ uint32be reserved34;
-	/* 0x38 */ uint32be reserved38;
-	/* 0x3C */ uint32be firstIndexOffset;
-	/* 0x40 */ uint32be secondIndexOffset;
-	/* 0x44 */ uint32be entryAreaEnd;
-	/* 0x48 */ uint8 payload[SWKBD_LEARN_DIC_SIZE - 0x48 - sizeof(uint32be)];
-	/* 0xA45C */ uint32be endMagic;
-};
-static_assert(sizeof(SwkbdLearnDic) == SWKBD_LEARN_DIC_SIZE);
+	cemuLog_logDebug(LogType::Force, "SwkbdInitLearnDic(0x{:08x})", hCPU->gpr[3]);
+	// todo
 
-uint32 SwkbdInitLearnDic(SwkbdLearnDic* dictionary)
-{
-	cemuLog_logDebug(LogType::Force, "SwkbdInitLearnDic(0x{:08x})", MEMPTR(dictionary).GetMPTR());
-	if (swkbdInternalState == nullptr || dictionary == nullptr)
-		return 0;
-
-
-	uint32 firstIndexOffset = 0x48;
-	uint32 secondIndexOffset = firstIndexOffset + SWKBD_LEARN_DIC_INDEX_COUNT * sizeof(uint16be);
-	uint32 indexTableEnd = secondIndexOffset + SWKBD_LEARN_DIC_INDEX_COUNT * sizeof(uint16be);
-	uint32 entryAreaEnd = indexTableEnd + SWKBD_LEARN_DIC_ENTRY_COUNT * SWKBD_LEARN_DIC_ENTRY_STRIDE;
-
-	memset(dictionary, 0, sizeof(SwkbdLearnDic));
-	dictionary->magic = SWKBD_LEARN_DIC_MAGIC;
-	dictionary->version = 0x30000;
-	dictionary->format = 0x80020000;
-	dictionary->storageSize = SWKBD_LEARN_DIC_SIZE - 0x48;
-	dictionary->metadataSize = 0x2C;
-	dictionary->maxWordLength = 0x6E;
-	dictionary->maxReadingLength = 0x6E;
-	dictionary->indexTableEnd = indexTableEnd;
-	dictionary->entryCount = SWKBD_LEARN_DIC_ENTRY_COUNT;
-	dictionary->entryStride = SWKBD_LEARN_DIC_ENTRY_STRIDE;
-	dictionary->firstIndexOffset = firstIndexOffset;
-	dictionary->secondIndexOffset = secondIndexOffset;
-	dictionary->entryAreaEnd = entryAreaEnd;
-	dictionary->endMagic = SWKBD_LEARN_DIC_MAGIC;
-
-	return 1;
+	// this has to fail (at least once?) or MH3U will not boot
+	osLib_returnFromFunction(hCPU, 1);
 }
 
-bool SwkbdIsNeedCalcSubThreadFont()
+bool isNeedCalc0 = true;
+bool isNeedCalc1 = true;
+
+void swkbdExport_SwkbdIsNeedCalcSubThreadFont(PPCInterpreter_t* hCPU)
 {
-	return isNeedCalcSubThreadFont > 0;
+	// SwkbdIsNeedCalcSubThreadFont__3RplFv
+	bool r = false;
+	osLib_returnFromFunction(hCPU, r?1:0);
 }
 
-bool SwkbdIsNeedCalcSubThreadPredict()
+void swkbdExport_SwkbdIsNeedCalcSubThreadPredict(PPCInterpreter_t* hCPU)
 {
-	return isNeedCalcSubThreadPredict > 0;
-}
+	// SwkbdIsNeedCalcSubThreadPredict__3RplFv
+	bool r = false;
 
-void SwkbdCalcSubThreadFont()
-{
-	if (isNeedCalcSubThreadFont == 0)
-		return;
-	isNeedCalcSubThreadFont--;
-	coreinit::OSSleepTicks(ESPRESSO_TIMER_CLOCK / 200); // simulate 5ms of working time
-}
-
-void SwkbdCalcSubThreadPredict()
-{
-	if (isNeedCalcSubThreadPredict == 0)
-		return;
-	isNeedCalcSubThreadPredict--;
-	coreinit::OSSleepTicks(ESPRESSO_TIMER_CLOCK / 200); // simulate 5ms of working time
-}
-
-void SwkbdCalc(void* controllerInfo)
-{
-	// no op for now
+	osLib_returnFromFunction(hCPU, r?1:0);
 }
 
 void swkbd_keyInput(uint32 keyCode);
@@ -572,7 +527,7 @@ typedef struct
 	uint32be endIndex;
 }changeStringParam_t;
 
-CafeStaticVar<changeStringParam_t> _changeStringParam{s_swkbdStaticData};
+SysAllocator<changeStringParam_t> _changeStringParam;
 
 void swkbd_inputStringChanged()
 {
@@ -669,58 +624,21 @@ void swkbd_keyInput(uint32 keyCode)
 
 namespace swkbd
 {
-	class : public COSModule
+	void load()
 	{
-		public:
-		std::string_view GetName() override
-		{
-			return "swkbd";
-		}
-
-		void RPLUnmapped() override
-		{
-			s_swkbdStaticData.Deallocate();
-		}
-
-		void RPLMapped() override
-		{
-			s_swkbdStaticData.Allocate();
-			isNeedCalcSubThreadFont = 0;
-			isNeedCalcSubThreadPredict = 0;
-			cafeExportRegisterFunc(SwkbdCreate, "swkbd", "SwkbdCreate__3RplFPUcQ3_2nn5swkbd10RegionTypeUiP8FSClient", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdCalc, "swkbd", "SwkbdCalc__3RplFRCQ3_2nn5swkbd14ControllerInfo", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdGetStateKeyboard, "swkbd", "SwkbdGetStateKeyboard__3RplFv", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdGetStateInputForm, "swkbd", "SwkbdGetStateInputForm__3RplFv", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdSetReceiver, "swkbd", "SwkbdSetReceiver__3RplFRCQ3_2nn5swkbd11ReceiverArg", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdAppearInputForm, "swkbd", "SwkbdAppearInputForm__3RplFRCQ3_2nn5swkbd9AppearArg", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdDisappearInputForm, "swkbd", "SwkbdDisappearInputForm__3RplFv", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdDisappearKeyboard, "swkbd", "SwkbdDisappearKeyboard__3RplFv", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdAppearKeyboard, "swkbd", "SwkbdAppearKeyboard__3RplFRCQ3_2nn5swkbd11KeyboardArg", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdGetInputFormString, "swkbd", "SwkbdGetInputFormString__3RplFv", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdIsDecideOkButton, "swkbd", "SwkbdIsDecideOkButton__3RplFPb", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdInitLearnDic, "swkbd", "SwkbdInitLearnDic__3RplFPv", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdGetDrawStringInfo, "swkbd", "SwkbdGetDrawStringInfo__3RplFPQ3_2nn5swkbd14DrawStringInfo", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdCalcSubThreadFont, "swkbd", "SwkbdCalcSubThreadFont__3RplFv", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdCalcSubThreadPredict, "swkbd", "SwkbdCalcSubThreadPredict__3RplFv", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdIsNeedCalcSubThreadFont, "swkbd", "SwkbdIsNeedCalcSubThreadFont__3RplFv", LogType::SWKBD);
-			cafeExportRegisterFunc(SwkbdIsNeedCalcSubThreadPredict, "swkbd", "SwkbdIsNeedCalcSubThreadPredict__3RplFv", LogType::SWKBD);
-		};
-
-		void rpl_entry(uint32 moduleHandle, coreinit::RplEntryReason reason) override
-		{
-			if (reason == coreinit::RplEntryReason::Loaded)
-			{
-
-			}
-			else if (reason == coreinit::RplEntryReason::Unloaded)
-			{
-				// todo
-			}
-		}
-	}s_COSswkbdModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSswkbdModule;
+		osLib_addFunction("swkbd", "SwkbdCreate__3RplFPUcQ3_2nn5swkbd10RegionTypeUiP8FSClient", swkbdExport_SwkbdCreate);
+		osLib_addFunction("swkbd", "SwkbdGetStateKeyboard__3RplFv", swkbdExport_SwkbdGetStateKeyboard);
+		osLib_addFunction("swkbd", "SwkbdGetStateInputForm__3RplFv", swkbdExport_SwkbdGetStateInputForm);
+		osLib_addFunction("swkbd", "SwkbdSetReceiver__3RplFRCQ3_2nn5swkbd11ReceiverArg", swkbdExport_SwkbdSetReceiver);
+		osLib_addFunction("swkbd", "SwkbdAppearInputForm__3RplFRCQ3_2nn5swkbd9AppearArg", swkbdExport_SwkbdAppearInputForm);
+		osLib_addFunction("swkbd", "SwkbdDisappearInputForm__3RplFv", swkbdExport_SwkbdDisappearInputForm);
+		osLib_addFunction("swkbd", "SwkbdDisappearKeyboard__3RplFv", swkbdExport_SwkbdDisappearKeyboard);
+		osLib_addFunction("swkbd", "SwkbdAppearKeyboard__3RplFRCQ3_2nn5swkbd11KeyboardArg", swkbdExport_SwkbdAppearKeyboard);
+		osLib_addFunction("swkbd", "SwkbdGetInputFormString__3RplFv", swkbdExport_SwkbdGetInputFormString);
+		osLib_addFunction("swkbd", "SwkbdIsDecideOkButton__3RplFPb", swkbdExport_SwkbdIsDecideOkButton);
+		osLib_addFunction("swkbd", "SwkbdInitLearnDic__3RplFPv", swkbdExport_SwkbdInitLearnDic);
+		osLib_addFunction("swkbd", "SwkbdGetDrawStringInfo__3RplFPQ3_2nn5swkbd14DrawStringInfo", swkbdExport_SwkbdGetDrawStringInfo);
+		osLib_addFunction("swkbd", "SwkbdIsNeedCalcSubThreadFont__3RplFv", swkbdExport_SwkbdIsNeedCalcSubThreadFont);
+		osLib_addFunction("swkbd", "SwkbdIsNeedCalcSubThreadPredict__3RplFv", swkbdExport_SwkbdIsNeedCalcSubThreadPredict);
 	}
 }

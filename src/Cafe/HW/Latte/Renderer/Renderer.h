@@ -33,7 +33,6 @@ enum class RendererAPI
 {
 	OpenGL,
 	Vulkan,
-	Metal,
 
 	MAX
 };
@@ -50,11 +49,9 @@ public:
 		U32
 	};
 
-	Renderer(RendererAPI api) : m_rendererAPI(api) {};
 	virtual ~Renderer() = default;
 
-	RendererAPI GetType() const { return m_rendererAPI; }
-	const std::string& GetDeviceName() { return m_selectedDeviceName; }
+	virtual RendererAPI GetType() = 0;
 
 	virtual void Initialize();
 	virtual void Shutdown();
@@ -68,21 +65,16 @@ public:
 	virtual void DrawEmptyFrame(bool mainWindow) = 0;
 	virtual void SwapBuffers(bool swapTV, bool swapDRC) = 0;
 
-	using ScreenshotSaveFunction = std::function<std::optional<std::string>(const std::vector<uint8>&, int, int, bool)>;
-	void RequestScreenshot(ScreenshotSaveFunction onSaveScreenshot);
-	void CancelScreenshotRequest();
-
 	virtual void HandleScreenshotRequest(LatteTextureView* texView, bool padView){}
-
-	virtual void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter,
-												sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight,
+	
+	virtual void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter, 
+												sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight, 
 												bool padView, bool clearBackground) = 0;
 	virtual bool BeginFrame(bool mainWindow) = 0;
 
 	// flush control
 	virtual void Flush(bool waitIdle = false) = 0; // called when explicit flush is required (e.g. by imgui)
 	virtual void NotifyLatteCommandProcessorIdle() = 0; // called when command processor has no more commands available or when stalled
-	virtual void SurfaceSync(Latte::E_COHER_CNTL coher, MPTR address, uint32 size) {} // triggered by game via GX2Invalidate, can be utilized by the render backend as an optimization hint
 
 	// imgui
 	virtual bool ImguiBegin(bool mainWindow);
@@ -92,7 +84,6 @@ public:
 	virtual void DeleteFontTextures() = 0;
 
 	GfxVendor GetVendor() const { return m_vendor; }
-	virtual bool UseTFViaSSBO() const { return false; }
 	virtual void AppendOverlayDebugInfo() = 0;
 
 	// rendertarget
@@ -130,15 +121,7 @@ public:
 	virtual void bufferCache_copy(uint32 srcOffset, uint32 dstOffset, uint32 size) = 0;
 	virtual void bufferCache_copyStreamoutToMainBuffer(uint32 srcOffset, uint32 dstOffset, uint32 size) = 0;
 
-	struct BindBufferParam
-	{
-		uint8 index;
-		uint16 stride;
-		uint32 bindOffset;
-		uint32 bindSize;
-	};
-
-	virtual void buffer_bindVertexBuffers(std::span<BindBufferParam> bindings) = 0;
+	virtual void buffer_bindVertexBuffer(uint32 bufferIndex, uint32 offset, uint32 size) = 0;
 	virtual void buffer_bindUniformBuffer(LatteConst::ShaderType shaderType, uint32 bufferIndex, uint32 offset, uint32 size) = 0;
 
 	// shader
@@ -151,7 +134,7 @@ public:
 
 	// core drawing logic
 	virtual void draw_beginSequence() = 0;
-	virtual void draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 instanceCount, uint32 count, MPTR indexDataMPTR, Latte::LATTE_VGT_DMA_INDEX_TYPE::E_INDEX_TYPE indexType, const LatteDrawcallContext& drawcallContext) = 0;
+	virtual void draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 instanceCount, uint32 count, MPTR indexDataMPTR, Latte::LATTE_VGT_DMA_INDEX_TYPE::E_INDEX_TYPE indexType, bool isFirst) = 0;
 	virtual void draw_endSequence() = 0;
 
 	// index
@@ -173,9 +156,7 @@ public:
 
 protected:
 	virtual void GetVendorInformation() { }
-	RendererAPI m_rendererAPI;
 	GfxVendor m_vendor = GfxVendor::Generic;
-	std::string m_selectedDeviceName = "";
 
 	static uint8 SRGBComponentToRGB(uint8 ci);
 	static uint8 RGBComponentToSRGB(uint8 cli);
@@ -187,10 +168,7 @@ protected:
 		Pad,
 	};
 	ScreenshotState m_screenshot_state = ScreenshotState::None;
-	bool m_screenshot_requested = false;
-	ScreenshotSaveFunction m_on_save_screenshot;
-
-	void SaveScreenshot(const std::vector<uint8>& rgb_data, int width, int height, bool mainWindow);
+	void SaveScreenshot(const std::vector<uint8>& rgb_data, int width, int height, bool mainWindow) const;
 
 
 	ImFontAtlas* imguiFontAtlas{};

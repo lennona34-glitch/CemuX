@@ -1,13 +1,11 @@
 #include "Cafe/OS/common/OSCommon.h"
 #include "Cafe/HW/Espresso/PPCCallback.h"
+#include "gui/wxgui.h"
 #include "Cafe/OS/libs/padscore/padscore.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Time.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Alarm.h"
 #include "Cafe/OS/libs/coreinit/coreinit_SystemInfo.h"
-#include "WindowSystem.h"
 #include "input/InputManager.h"
-
-constinit COSStaticData s_padscoreStaticData;
 
 // KPAD
 
@@ -57,7 +55,7 @@ namespace padscore
 	WPADState_t g_wpad_state = kWPADStateMaster;
 
 	struct {
-		CafeStaticVar<coreinit::OSAlarm_t> alarm{s_padscoreStaticData};
+		SysAllocator<coreinit::OSAlarm_t> alarm;
 		bool kpad_initialized = false;
 
 		struct WPADData
@@ -136,7 +134,7 @@ void padscoreExport_WPADGetInfoAsync(PPCInterpreter_t* hCPU)
 	ppcDefineParamU32(channel, 0);
 	ppcDefineParamStructPtr(wpadInfo, WPADInfo_t, 1);
 	ppcDefineParamMPTR(callbackFunc, 2);
-	cemuLog_log(LogType::InputAPI, "WPADGetInfoAsync({}, 0x{:08x}, 0x{:08x})", channel, memory_getVirtualOffsetFromPointer(wpadInfo), callbackFunc);
+	cemuLog_log(LogType::InputAPI, "WPADGetInfoAsync({}, 0x{:08x}, 0x{:08x})", channel, fmt::ptr(wpadInfo), callbackFunc);
 
 	if (channel < InputManager::kMaxWPADControllers)
 	{
@@ -172,7 +170,7 @@ void padscoreExport_WPADRead(PPCInterpreter_t* hCPU)
 {
 	ppcDefineParamU32(channel, 0);
 	ppcDefineParamPtr(wpadStatus, WPADStatus_t, 1);
-	cemuLog_log(LogType::InputAPI, "WPADRead({}, {:x})", channel, memory_getVirtualOffsetFromPointer(wpadStatus));
+	cemuLog_log(LogType::InputAPI, "WPADRead({}, {:x})", channel, fmt::ptr(wpadStatus));
 
 	if (channel < InputManager::kMaxWPADControllers)
 	{
@@ -226,7 +224,7 @@ void padscoreExport_WPADGetInfo(PPCInterpreter_t* hCPU)
 {
 	ppcDefineParamU32(channel, 0);
 	ppcDefineParamStructPtr(wpadInfo, WPADInfo_t, 1);
-	cemuLog_log(LogType::InputAPI, "WPADGetInfo({}, 0x{:08x})", channel, memory_getVirtualOffsetFromPointer(wpadInfo));
+	cemuLog_log(LogType::InputAPI, "WPADGetInfo({}, 0x{:08x})", channel, fmt::ptr(wpadInfo));
 
 	if (channel < InputManager::kMaxWPADControllers)
 	{
@@ -472,7 +470,7 @@ sint32 _KPADRead(uint32 channel, KPADStatus_t* samplingBufs, uint32 length, bety
 	samplingBufs->wpadErr = WPAD_ERR_NONE;
 	samplingBufs->data_format = controller->get_data_format();
 	samplingBufs->devType = controller->get_device_type();
-	if(!WindowSystem::InputConfigWindowHasFocus())
+	if(!g_inputConfigWindowHasFocus)
 	{
 		const auto btn_repeat = padscore::g_padscore.controller_data[channel].btn_repeat;
 		controller->KPADRead(*samplingBufs, btn_repeat);
@@ -768,73 +766,45 @@ namespace padscore
 		OSSetPeriodicAlarm(&g_padscore.alarm, start_tick, period_tick, handler);
 	}
 
-	class : public COSModule
+	void load()
 	{
-		public:
-		std::string_view GetName() override
-		{
-			return "padscore";
-		}
+		cafeExportRegister("padscore", WPADIsMplsAttached, LogType::InputAPI);
+		cafeExportRegister("padscore", WPADGetAccGravityUnit, LogType::InputAPI);
 
-		void RPLUnmapped() override
-		{
-			coreinit::OSCancelAlarm(g_padscore.alarm.GetPtr());
-			s_padscoreStaticData.Deallocate();
-		}
+		// wpad
+		//osLib_addFunction("padscore", "WPADInit", padscore::export_WPADInit);
 
-		void rpl_entry(uint32 moduleHandle, coreinit::RplEntryReason reason) override
-		{
-			if (reason == coreinit::RplEntryReason::Loaded)
-				start();
-		}
+		// kpad
+		osLib_addFunction("padscore", "KPADSetMaxControllers", padscore::export_KPADSetMaxControllers);
+		osLib_addFunction("padscore", "KPADGetMaxControllers", padscore::export_KPADGetMaxControllers);
+		osLib_addFunction("padscore", "KPADEnableDPD", padscore::export_KPADEnableDPD);
+		osLib_addFunction("padscore", "KPADGetMplsWorkSize", padscore::export_KPADGetMplsWorkSize);
+		osLib_addFunction("padscore", "KPADInit", padscore::export_KPADInit);
+		osLib_addFunction("padscore", "KPADInitEx", padscore::export_KPADInitEx);
 
-		void RPLMapped() override
-		{
-			s_padscoreStaticData.Allocate();
-			cafeExportRegister("padscore", WPADIsMplsAttached, LogType::InputAPI);
-			cafeExportRegister("padscore", WPADGetAccGravityUnit, LogType::InputAPI);
+		osLib_addFunction("padscore", "KPADSetConnectCallback", padscoreExport_KPADSetConnectCallback);
+		osLib_addFunction("padscore", "KPADReadEx", padscoreExport_KPADReadEx);
+		osLib_addFunction("padscore", "KPADRead", padscoreExport_KPADRead);
+		osLib_addFunction("padscore", "KPADGetUnifiedWpadStatus", padscoreExport_KPADGetUnifiedWpadStatus);
+		osLib_addFunction("padscore", "KPADSetSamplingCallback", padscoreExport_KPADSetSamplingCallback);
+		osLib_addFunction("padscore", "KPADSetBtnRepeat", padscoreExport_KPADSetBtnRepeat);
 
-			// wpad
-			//osLib_addFunction("padscore", "WPADInit", padscore::export_WPADInit);
+		osLib_addFunction("padscore", "WPADGetBatteryLevel", padscoreExport_WPADGetBatteryLevel);
+		osLib_addFunction("padscore", "WPADControlMotor", padscoreExport_WPADControlMotor);
+		osLib_addFunction("padscore", "WPADIsMotorEnabled", padscoreExport_WPADIsMotorEnabled);
+		osLib_addFunction("padscore", "WPADGetStatus", padscoreExport_WPADGetStatus);
+		osLib_addFunction("padscore", "WPADProbe", padscoreExport_WPADProbe);
+		osLib_addFunction("padscore", "WPADGetInfoAsync", padscoreExport_WPADGetInfoAsync);
+		osLib_addFunction("padscore", "WPADGetInfo", padscoreExport_WPADGetInfo);
+		osLib_addFunction("padscore", "WPADSetConnectCallback", padscoreExport_KPADSetConnectCallback);
+		osLib_addFunction("padscore", "WPADSetDataFormat", padscoreExport_WPADSetDataFormat);
+		osLib_addFunction("padscore", "WPADGetDataFormat", padscoreExport_WPADGetDataFormat);
+		osLib_addFunction("padscore", "WPADRead", padscoreExport_WPADRead);
+		osLib_addFunction("padscore", "WPADSetExtensionCallback", padscoreExport_WPADSetExtensionCallback);
+		osLib_addFunction("padscore", "WPADSetSamplingCallback", padscoreExport_KPADSetSamplingCallback);
+		osLib_addFunction("padscore", "WPADControlDpd", padscoreExport_WPADControlDpd);
 
-			// kpad
-			osLib_addFunction("padscore", "KPADSetMaxControllers", padscore::export_KPADSetMaxControllers);
-			osLib_addFunction("padscore", "KPADGetMaxControllers", padscore::export_KPADGetMaxControllers);
-			osLib_addFunction("padscore", "KPADEnableDPD", padscore::export_KPADEnableDPD);
-			osLib_addFunction("padscore", "KPADGetMplsWorkSize", padscore::export_KPADGetMplsWorkSize);
-			osLib_addFunction("padscore", "KPADInit", padscore::export_KPADInit);
-			osLib_addFunction("padscore", "KPADInitEx", padscore::export_KPADInitEx);
-
-			osLib_addFunction("padscore", "KPADSetConnectCallback", padscoreExport_KPADSetConnectCallback);
-			osLib_addFunction("padscore", "KPADReadEx", padscoreExport_KPADReadEx);
-			osLib_addFunction("padscore", "KPADRead", padscoreExport_KPADRead);
-			osLib_addFunction("padscore", "KPADGetUnifiedWpadStatus", padscoreExport_KPADGetUnifiedWpadStatus);
-			osLib_addFunction("padscore", "KPADSetSamplingCallback", padscoreExport_KPADSetSamplingCallback);
-			osLib_addFunction("padscore", "KPADSetBtnRepeat", padscoreExport_KPADSetBtnRepeat);
-
-			osLib_addFunction("padscore", "WPADGetBatteryLevel", padscoreExport_WPADGetBatteryLevel);
-			osLib_addFunction("padscore", "WPADControlMotor", padscoreExport_WPADControlMotor);
-			osLib_addFunction("padscore", "WPADIsMotorEnabled", padscoreExport_WPADIsMotorEnabled);
-			osLib_addFunction("padscore", "WPADGetStatus", padscoreExport_WPADGetStatus);
-			osLib_addFunction("padscore", "WPADProbe", padscoreExport_WPADProbe);
-			osLib_addFunction("padscore", "WPADGetInfoAsync", padscoreExport_WPADGetInfoAsync);
-			osLib_addFunction("padscore", "WPADGetInfo", padscoreExport_WPADGetInfo);
-			osLib_addFunction("padscore", "WPADSetConnectCallback", padscoreExport_KPADSetConnectCallback);
-			osLib_addFunction("padscore", "WPADSetDataFormat", padscoreExport_WPADSetDataFormat);
-			osLib_addFunction("padscore", "WPADGetDataFormat", padscoreExport_WPADGetDataFormat);
-			osLib_addFunction("padscore", "WPADRead", padscoreExport_WPADRead);
-			osLib_addFunction("padscore", "WPADSetExtensionCallback", padscoreExport_WPADSetExtensionCallback);
-			osLib_addFunction("padscore", "WPADSetSamplingCallback", padscoreExport_KPADSetSamplingCallback);
-			osLib_addFunction("padscore", "WPADControlDpd", padscoreExport_WPADControlDpd);
-
-			osLib_addFunction("padscore", "WPADSetCallbackByKPAD", padscore::export_WPADSetCallbackByKPAD);
-		};
-
-	}s_COSCoreinitModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSCoreinitModule;
+		osLib_addFunction("padscore", "WPADSetCallbackByKPAD", padscore::export_WPADSetCallbackByKPAD);
 	}
 
 }

@@ -44,7 +44,7 @@ bool strcpy_whole(char* dst, size_t dstLength, const char* src)
 
 namespace coreinit
 {
-	CafeStaticVar<OSMutex> s_fsGlobalMutex{coreinit::g_coreinitStaticData};
+	SysAllocator<OSMutex> s_fsGlobalMutex;
 
 	inline void FSLockMutex()
 	{
@@ -118,8 +118,6 @@ namespace coreinit
 
 	bool _sdCard01Mounted = false;
 	bool _mlc01Mounted = false;
-	std::string s_sdCardMountPath;
-	std::string s_mlcMountPath;
 
 	void mountSDCard()
 	{
@@ -132,7 +130,6 @@ namespace coreinit
 		FSCDeviceHostFS_Mount("/vol/external01", _pathToUtf8(path), FSC_PRIORITY_BASE);
 
 		_sdCard01Mounted = true;
-		s_sdCardMountPath = "/vol/external01";
 	}
 
 	FS_RESULT FSMount(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, FS_MOUNT_SOURCE* mountSourceInfo, char* mountPathOut, sint32 mountPathMaxLength, FS_ERROR_MASK errMask)
@@ -167,7 +164,6 @@ namespace coreinit
 			if (!FSCDeviceHostFS_Mount(mountPathOut, _pathToUtf8(path), FSC_PRIORITY_BASE))
 				return FS_RESULT::ERR_PLACEHOLDER;
 			_sdCard01Mounted = true;
-			s_sdCardMountPath = mountPathOut;
 		}
 		else if (strcmp(mountPathSrc, "/dev/mlc01") == 0)
 		{
@@ -177,7 +173,6 @@ namespace coreinit
 			if (!FSCDeviceHostFS_Mount(mountPathOut, _pathToUtf8(ActiveSettings::GetMlcPath()), FSC_PRIORITY_BASE))
 				return FS_RESULT::ERR_PLACEHOLDER;
 			_mlc01Mounted = true;
-			s_mlcMountPath = mountPathOut;
 		}
 		else
 		{
@@ -747,8 +742,7 @@ namespace coreinit
 		}
 
 		__FSCmdSubmitResult(cmd, fsStatus);
-		// dont read from cmd after this point, since the game could already have modified it
-		__FSUpdateQueue(&client->fsCmdQueue);
+		__FSUpdateQueue(&cmd->fsClientBody->fsCmdQueue);
 		osLib_returnFromFunction(hCPU, 0);
 	}
 
@@ -1061,7 +1055,7 @@ namespace coreinit
 		return FSA_RESULT::OK;
 	}
 
-	CafeStaticVar<uint8, 128, 64> _tempFSSpace{coreinit::g_coreinitStaticData};
+	SysAllocator<uint8, 128, 64> _tempFSSpace;
 
 	sint32 __FSReadFileAsyncEx(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, void* dest, uint32 size, uint32 count, bool usePos, uint32 filePos, uint32 fileHandle, uint32 flag, uint32 errorMask, FSAsyncParams* fsAsyncParams)
 	{
@@ -2024,9 +2018,9 @@ namespace coreinit
 		return FSA_RESULT::OK;
 	}
 
-	CafeStaticVar<coreinit::IPCBufPool_t*> s_fsaIpcPool{coreinit::g_coreinitStaticData};
-	CafeStaticVar<uint8, 0x37500> s_fsaIpcPoolBuffer{coreinit::g_coreinitStaticData};
-	CafeStaticVar<uint32be> s_fsaIpcPoolBufferNumItems{coreinit::g_coreinitStaticData};
+	SysAllocator<coreinit::IPCBufPool_t*> s_fsaIpcPool;
+	SysAllocator<uint8, 0x37500> s_fsaIpcPoolBuffer;
+	SysAllocator<uint32be> s_fsaIpcPoolBufferNumItems;
 
 	std::mutex sFSAIPCBufferLock;
 	bool s_fsaInitDone = false;
@@ -2513,27 +2507,27 @@ namespace coreinit
 		return FSAGetInfoByQuery(client, path, FSA_QUERY_TYPE_FREESPACE, outSize);
 	}
 
-	CafeStaticVar s_fsaStr_OK(g_coreinitStaticData, "FSA_STATUS_OK");
-	CafeStaticVar s_fsaStr_NOT_INIT(g_coreinitStaticData, "FSA_STATUS_NOT_INIT");
-	CafeStaticVar s_fsaStr_END_OF_DIRECTORY(g_coreinitStaticData, "FSA_STATUS_END_OF_DIRECTORY");
-	CafeStaticVar s_fsaStr_END_OF_FILE(g_coreinitStaticData, "FSA_STATUS_END_OF_FILE");
-	CafeStaticVar s_fsaStr_MAX_CLIENTS(g_coreinitStaticData, "FSA_STATUS_MAX_CLIENTS");
-	CafeStaticVar s_fsaStr_MAX_FILES(g_coreinitStaticData, "FSA_STATUS_MAX_FILES");
-	CafeStaticVar s_fsaStr_MAX_DIRS(g_coreinitStaticData, "FSA_STATUS_MAX_DIRS");
-	CafeStaticVar s_fsaStr_ALREADY_EXISTS(g_coreinitStaticData, "FSA_STATUS_ALREADY_EXISTS");
-	CafeStaticVar s_fsaStr_NOT_FOUND(g_coreinitStaticData, "FSA_STATUS_NOT_FOUND");
-	CafeStaticVar s_fsaStr_PERMISSION_ERROR(g_coreinitStaticData, "FSA_STATUS_PERMISSION_ERROR");
-	CafeStaticVar s_fsaStr_INVALID_PARAM(g_coreinitStaticData, "FSA_STATUS_INVALID_PARAM");
-	CafeStaticVar s_fsaStr_INVALID_PATH(g_coreinitStaticData, "FSA_STATUS_INVALID_PATH");
-	CafeStaticVar s_fsaStr_INVALID_BUFFER(g_coreinitStaticData, "FSA_STATUS_INVALID_BUFFER");
-	CafeStaticVar s_fsaStr_INVALID_ALIGNMENT(g_coreinitStaticData, "FSA_STATUS_INVALID_ALIGNMENT");
-	CafeStaticVar s_fsaStr_INVALID_CLIENT_HANDLE(g_coreinitStaticData, "FSA_STATUS_INVALID_CLIENT_HANDLE");
-	CafeStaticVar s_fsaStr_INVALID_FILE_HANDLE(g_coreinitStaticData, "FSA_STATUS_INVALID_FILE_HANDLE");
-	CafeStaticVar s_fsaStr_INVALID_DIR_HANDLE(g_coreinitStaticData, "FSA_STATUS_INVALID_DIR_HANDLE");
-	CafeStaticVar s_fsaStr_NOT_FILE(g_coreinitStaticData, "FSA_STATUS_NOT_FILE");
-	CafeStaticVar s_fsaStr_NOT_DIR(g_coreinitStaticData, "FSA_STATUS_NOT_DIR");
-	CafeStaticVar s_fsaStr_OUT_OF_RESOURCES(g_coreinitStaticData, "FSA_STATUS_OUT_OF_RESOURCES");
-	CafeStaticVar s_fsaStr_UNKNOWN(g_coreinitStaticData, "FSA_STATUS_???");
+	SysAllocator s_fsaStr_OK("FSA_STATUS_OK");
+	SysAllocator s_fsaStr_NOT_INIT("FSA_STATUS_NOT_INIT");
+	SysAllocator s_fsaStr_END_OF_DIRECTORY("FSA_STATUS_END_OF_DIRECTORY");
+	SysAllocator s_fsaStr_END_OF_FILE("FSA_STATUS_END_OF_FILE");
+	SysAllocator s_fsaStr_MAX_CLIENTS("FSA_STATUS_MAX_CLIENTS");
+	SysAllocator s_fsaStr_MAX_FILES("FSA_STATUS_MAX_FILES");
+	SysAllocator s_fsaStr_MAX_DIRS("FSA_STATUS_MAX_DIRS");
+	SysAllocator s_fsaStr_ALREADY_EXISTS("FSA_STATUS_ALREADY_EXISTS");
+	SysAllocator s_fsaStr_NOT_FOUND("FSA_STATUS_NOT_FOUND");
+	SysAllocator s_fsaStr_PERMISSION_ERROR("FSA_STATUS_PERMISSION_ERROR");
+	SysAllocator s_fsaStr_INVALID_PARAM("FSA_STATUS_INVALID_PARAM");
+	SysAllocator s_fsaStr_INVALID_PATH("FSA_STATUS_INVALID_PATH");
+	SysAllocator s_fsaStr_INVALID_BUFFER("FSA_STATUS_INVALID_BUFFER");
+	SysAllocator s_fsaStr_INVALID_ALIGNMENT("FSA_STATUS_INVALID_ALIGNMENT");
+	SysAllocator s_fsaStr_INVALID_CLIENT_HANDLE("FSA_STATUS_INVALID_CLIENT_HANDLE");
+	SysAllocator s_fsaStr_INVALID_FILE_HANDLE("FSA_STATUS_INVALID_FILE_HANDLE");
+	SysAllocator s_fsaStr_INVALID_DIR_HANDLE("FSA_STATUS_INVALID_DIR_HANDLE");
+	SysAllocator s_fsaStr_NOT_FILE("FSA_STATUS_NOT_FILE");
+	SysAllocator s_fsaStr_NOT_DIR("FSA_STATUS_NOT_DIR");
+	SysAllocator s_fsaStr_OUT_OF_RESOURCES("FSA_STATUS_OUT_OF_RESOURCES");
+	SysAllocator s_fsaStr_UNKNOWN("FSA_STATUS_???");
 
 	const char* FSAGetStatusStr(FSA_RESULT status)
 	{
@@ -2650,24 +2644,8 @@ namespace coreinit
 		return FSA_RESULT::OK;
 	}
 
-	void ResetFS()
-	{
-		if (_sdCard01Mounted)
-			fsc_unmount(s_sdCardMountPath, FSC_PRIORITY_BASE);
-		if (_mlc01Mounted)
-			fsc_unmount(s_mlcMountPath, FSC_PRIORITY_BASE);
-		s_sdCardMountPath.clear();
-		s_mlcMountPath.clear();
-		s_fsa_activeClients.clear();
-	}
-
 	void InitializeFS()
 	{
-		sFSInitialized = true;
-		sFSShutdown = false;
-		_sdCard01Mounted = false;
-		_mlc01Mounted = false;
-		s_fsaInitDone = false;
 		OSInitMutex(&s_fsGlobalMutex);
 
 		cafeExportRegister("coreinit", FSInit, LogType::CoreinitFile);

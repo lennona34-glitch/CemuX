@@ -10,7 +10,7 @@
 #include "util/helpers/StringHelpers.h"
 #include "Cafe/IOSU/iosu_types_common.h"
 #include "Cafe/IOSU/nn/iosu_nn_service.h"
-#include "Common/socket.h"
+
 #include "Common/CafeString.h"
 
 std::mutex g_friend_notification_mutex;
@@ -20,9 +20,6 @@ namespace iosu
 {
 	namespace fpd
 	{
-		constinit IOSUStaticData s_staticData;
-		nn::IPCSimpleService::WorkArea s_workArea(s_staticData);
-
 		using NotificationRunningId = uint64;
 
 		struct NotificationEntry
@@ -71,7 +68,7 @@ namespace iosu
 			std::atomic_uint64_t m_notificationQueueIndex{1};
 		}g_NotificationQueue;
 
-		struct
+		struct  
 		{
 			bool isThreadStarted;
 			bool isInitialized2;
@@ -135,7 +132,7 @@ namespace iosu
 
 		void convertMultiByteStringToBigEndianWidechar(const char* input, uint16be* output, sint32 maxOutputLength)
 		{
-			std::vector<uint16be> beStr = StringHelpers::FromUtf8(input);
+			std::basic_string<uint16be> beStr = StringHelpers::FromUtf8(input);
 			if (beStr.size() >= maxOutputLength - 1)
 				beStr.resize(maxOutputLength-1);
 			for (size_t i = 0; i < beStr.size(); i++)
@@ -217,9 +214,12 @@ namespace iosu
 			friendData->friendExtraData.gameKey.ukn08 = frd->presence.gameKey.ukn;
 			NexPresenceToGameMode(&frd->presence, &friendData->friendExtraData.gameMode);
 
-			friendData->friendExtraData.gameModeDescription.assignFromUTF8(frd->presence.msg);
-			friendData->friendExtraData.comment.commentString.assignFromUTF8(frd->comment.commentString);
-
+			auto fixed_presence_msg = '\0' + frd->presence.msg; // avoid first character of comment from being cut off
+			friendData->friendExtraData.gameModeDescription.assignFromUTF8(fixed_presence_msg);
+			
+			auto fixed_comment = '\0' + frd->comment.commentString; // avoid first character of comment from being cut off
+			friendData->friendExtraData.comment.assignFromUTF8(fixed_comment);
+			
 			// set valid dates
 			friendData->uknDate.year = 2018;
 			friendData->uknDate.day = 1;
@@ -293,7 +293,7 @@ namespace iosu
 			memset(friendRequest, 0, sizeof(FriendRequest));
 
 			friendRequest->pid = frdReq->principalInfo.principalId;
-
+			
 			strncpy((char*)friendRequest->nnid, frdReq->principalInfo.nnid, sizeof(friendRequest->nnid));
 			friendRequest->nnid[sizeof(friendRequest->nnid) - 1] = '\0';
 
@@ -365,7 +365,7 @@ namespace iosu
 			std::vector<FPDClient*> m_clients;
 
 		  public:
-			FPDService() : iosu::nn::IPCSimpleService("/dev/fpd", s_workArea) {}
+			FPDService() : iosu::nn::IPCSimpleService("/dev/fpd") {}
 
 			std::string GetThreadName() override
 			{
@@ -723,19 +723,20 @@ namespace iosu
 			{
 				if(numVecIn != 0 || numVecOut != 1)
 					return FPResult_InvalidIPCParam;
-				Comment outComment;
+				std::basic_string<uint16be> myComment;
 				if(g_fpd.nexFriendSession)
 				{
-					if(vecOut->size != sizeof(Comment))
+					if(vecOut->size != MY_COMMENT_LENGTH * sizeof(uint16be))
 					{
 						cemuLog_log(LogType::Force, "GetMyComment: Unexpected output size");
 						return FPResult_InvalidIPCParam;
 					}
 					nexComment myNexComment;
 					g_fpd.nexFriendSession->getMyComment(myNexComment);
-					outComment.commentString.assignFromUTF8(myNexComment.commentString);
+					myComment = StringHelpers::FromUtf8(myNexComment.commentString);
 				}
-				memcpy(vecOut->basePhys.GetPtr(), &outComment, sizeof(Comment));
+				myComment.insert(0, 1, '\0');
+				memcpy(vecOut->basePhys.GetPtr(), myComment.c_str(), MY_COMMENT_LENGTH * sizeof(uint16be));
 				return FPResult_Ok;
 			}
 
@@ -1165,9 +1166,10 @@ namespace iosu
 				}
 				IPCCommandBody* cmd = ServiceCallDelayCurrentResponse();
 
+				auto utf8_comment = StringHelpers::ToUtf8(newComment, messageLength);
 				nexComment temporaryComment;
 				temporaryComment.ukn0 = 0;
-				temporaryComment.commentString = StringHelpers::ToUtf8(newComment, messageLength-1);
+				temporaryComment.commentString = utf8_comment;
 				temporaryComment.ukn1 = 0;
 
 				g_fpd.nexFriendSession->updateCommentAsync(temporaryComment, [cmd](NexFriends::RpcErrorCode result) {
@@ -1454,7 +1456,7 @@ namespace iosu
 				iosu::act::getAccountId(currentSlot, accountId);
 				FFLData_t miiData;
 				act::getMii(currentSlot, &miiData);
-				uint16 screenName[ACT_NICKNAME_SIZE] = { 0 };
+				uint16 screenName[ACT_NICKNAME_LENGTH + 1] = { 0 };
 				act::getScreenname(currentSlot, screenName);
 				uint32 countryCode = 0;
 				act::getCountryIndex(currentSlot, &countryCode);
@@ -1486,7 +1488,7 @@ namespace iosu
 				const uint32_t hostIp = ((struct sockaddr_in*)addrs->ai_addr)->sin_addr.s_addr;
 				freeaddrinfo(addrs);
 				g_fpd.mtxFriendSession.lock();
-				g_fpd.nexFriendSession = new NexFriends(hostIp, nexTokenResult.nexToken.port, "ridfebb9", myPid, nexTokenResult.nexToken.nexPassword, nexTokenResult.nexToken.token, accountId, (uint8*)&miiData, screenName, (uint8)countryCode, g_fpd.myPresence);
+				g_fpd.nexFriendSession = new NexFriends(hostIp, nexTokenResult.nexToken.port, "ridfebb9", myPid, nexTokenResult.nexToken.nexPassword, nexTokenResult.nexToken.token, accountId, (uint8*)&miiData, (wchar_t*)screenName, (uint8)countryCode, g_fpd.myPresence);
 				g_fpd.nexFriendSession->setNotificationHandler(NotificationHandler);
 				g_fpd.mtxFriendSession.unlock();
 				cemuLog_log(LogType::Force, "IOSU_FPD: Created friend server session");
@@ -1513,7 +1515,6 @@ namespace iosu
 		{
 			void TitleStart() override
 			{
-				s_staticData.Allocate();
 				gFPDService.Start();
 				gFPDService.SetTimerUpdate(1000); // call TimerUpdate() once a second
 			}
@@ -1521,7 +1522,6 @@ namespace iosu
 			{
 				gFPDService.StopFriendSession();
 				gFPDService.Stop();
-				s_staticData.Deallocate();
 			}
 		}sIOSUModuleNNFPD;
 
@@ -1532,3 +1532,4 @@ namespace iosu
 
 	}
 }
+

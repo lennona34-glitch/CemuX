@@ -1,15 +1,17 @@
 #include "Cafe/OS/common/OSCommon.h"
+#include "gui/wxgui.h"
 #include "nn_save.h"
 
 #include "Cafe/OS/libs/nn_acp/nn_acp.h"
 #include "Cafe/OS/libs/nn_act/nn_act.h"
 
+#include <filesystem>
+#include <sstream>
 #include "config/ActiveSettings.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
 #include "Cafe/OS/libs/coreinit/coreinit_FS.h"
 #include "Cafe/CafeSystem.h"
 #include "Cafe/Filesystem/fsc.h"
-
 
 #define SAVE_STATUS_OK ((FSStatus)FS_RESULT::SUCCESS)
 #define SAVE_MAX_PATH_SIZE (FSA_CMD_PATH_MAX_LENGTH)
@@ -26,8 +28,6 @@ namespace nn
 {
 namespace save
 {
-	constinit COSStaticData s_rplData;
-
 	typedef FSStatus SAVEStatus;
 
 	typedef struct
@@ -39,7 +39,7 @@ namespace save
 		uint32 persistentIdCache[0xC];
 	}nn_save_t;
 
-	CafeStaticVar<nn_save_t> g_nn_save{s_rplData};
+	SysAllocator<nn_save_t> g_nn_save;
 
 	uint32 GetPersistentIdFromLocalCache(uint8 accountSlot)
 	{
@@ -229,6 +229,78 @@ namespace save
         return ConvertACPToSaveStatus(acp::ACPUnmountSaveDir());
     }
 
+	void _CheckAndMoveLegacySaves()
+	{
+		const uint64 titleId = CafeSystem::GetForegroundTitleId();
+
+		fs::path targetPath, sourcePath;
+		try
+		{
+			bool copiedUser = false, copiedCommon = false;
+
+			const auto sourceSavePath = ActiveSettings::GetMlcPath("emulatorSave/{:08x}", CafeSystem::GetRPXHashBase());
+			sourcePath = sourceSavePath;
+
+			if (fs::exists(sourceSavePath) && is_directory(sourceSavePath))
+			{
+				targetPath = ActiveSettings::GetMlcPath("usr/save/{:08x}/{:08x}/user/{:08x}", GetTitleIdHigh(titleId), GetTitleIdLow(titleId), 0x80000001);
+				fs::create_directories(targetPath);
+				copy(sourceSavePath, targetPath, fs::copy_options::overwrite_existing | fs::copy_options::recursive);
+				copiedUser = true;
+			}
+
+			const auto sourceCommonPath = ActiveSettings::GetMlcPath("emulatorSave/{:08x}_255", CafeSystem::GetRPXHashBase());
+			sourcePath = sourceCommonPath;
+
+			if (fs::exists(sourceCommonPath) && is_directory(sourceCommonPath))
+			{
+				targetPath = ActiveSettings::GetMlcPath("usr/save/{:08x}/{:08x}/user/common", GetTitleIdHigh(titleId), GetTitleIdLow(titleId));
+				fs::create_directories(targetPath);
+				copy(sourceCommonPath, targetPath, fs::copy_options::overwrite_existing | fs::copy_options::recursive);
+				copiedCommon = true;
+			}
+
+			if (copiedUser)
+				fs::remove_all(sourceSavePath);
+
+			if (copiedCommon)
+				fs::remove_all(sourceCommonPath);
+		}
+		catch (const std::exception& ex)
+		{
+#if BOOST_OS_WINDOWS
+			std::wstringstream errorMsg;
+			errorMsg << L"Couldn't move your save files!" << std::endl << std::endl;
+			errorMsg << L"Error: " << ex.what() << std::endl << std::endl;
+			errorMsg << L"From:" << std::endl << sourcePath << std::endl << std::endl << "To:" << std::endl << targetPath;
+
+			const DWORD lastError = GetLastError();
+			if (lastError != ERROR_SUCCESS)
+			{
+				LPTSTR lpMsgBuf = nullptr;
+				FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, lastError, 0, (LPTSTR)&lpMsgBuf, 0, nullptr);
+				if (lpMsgBuf)
+				{
+					errorMsg << std::endl << std::endl << L"Details: " << lpMsgBuf;
+					LocalFree(lpMsgBuf);
+				}
+				else
+				{
+					errorMsg << std::endl << std::endl << L"Error Code: 0x" << std::hex << lastError;
+				}
+			}
+
+			errorMsg << std::endl << std::endl << "Continuing will create a new save at the target location." << std::endl << "Do you want to continue?";
+
+			int result = wxMessageBox(errorMsg.str(), "Save Migration - Error", wxCENTRE | wxYES_NO | wxICON_ERROR);
+			if (result != wxYES)
+			{
+				exit(0);
+				return;
+			}
+#endif
+		}
+	}
 
 	SAVEStatus SAVEInit()
 	{
@@ -248,6 +320,8 @@ namespace save
 			
 			SAVEMountSaveDir();
 			g_nn_save->initialized = true;
+
+			_CheckAndMoveLegacySaves();
 
 			uint32 high = GetTitleIdHigh(titleId) & (~0xC);
 			uint32 low = GetTitleIdLow(titleId);
@@ -766,95 +840,63 @@ namespace save
 		return asyncData->GetResult();
 	}
 
+	void load()
+	{
+		cafeExportRegister("nn_save", SAVEInit, LogType::Save);
+		cafeExportRegister("nn_save", SAVEInitSaveDir, LogType::Save);
+
+		cafeExportRegister("nn_save", SAVEGetSharedDataTitlePath, LogType::Save);
+		cafeExportRegister("nn_save", SAVEGetSharedSaveDataPath, LogType::Save);
+
+		cafeExportRegister("nn_save", SAVEGetFreeSpaceSize, LogType::Save);
+		cafeExportRegister("nn_save", SAVEGetFreeSpaceSizeAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEMakeDir, LogType::Save);
+		cafeExportRegister("nn_save", SAVEMakeDirAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVERemove, LogType::Save);
+		cafeExportRegister("nn_save", SAVERemoveAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEChangeDir, LogType::Save);
+		cafeExportRegister("nn_save", SAVEChangeDirAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVERename, LogType::Save);
+		cafeExportRegister("nn_save", SAVERenameAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEFlushQuota, LogType::Save);
+		cafeExportRegister("nn_save", SAVEFlushQuotaAsync, LogType::Save);
+
+		cafeExportRegister("nn_save", SAVEGetStat, LogType::Save);
+		cafeExportRegister("nn_save", SAVEGetStatAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEGetStatOtherApplication, LogType::Save);
+		cafeExportRegister("nn_save", SAVEGetStatOtherApplicationAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEGetStatOtherNormalApplication, LogType::Save);
+		cafeExportRegister("nn_save", SAVEGetStatOtherNormalApplicationAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEGetStatOtherNormalApplicationVariation, LogType::Save);
+		cafeExportRegister("nn_save", SAVEGetStatOtherNormalApplicationVariationAsync, LogType::Save);
+
+		cafeExportRegister("nn_save", SAVEOpenFile, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenFileAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenFileOtherApplication, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenFileOtherApplicationAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenFileOtherNormalApplication, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenFileOtherNormalApplicationAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenFileOtherNormalApplicationVariation, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenFileOtherNormalApplicationVariationAsync, LogType::Save);
+
+		cafeExportRegister("nn_save", SAVEOpenDir, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenDirAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenDirOtherApplication, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenDirOtherApplicationAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenDirOtherNormalApplication, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenDirOtherNormalApplicationVariation, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenDirOtherNormalApplicationAsync, LogType::Save);
+		cafeExportRegister("nn_save", SAVEOpenDirOtherNormalApplicationVariationAsync, LogType::Save);
+	}
+
     void ResetToDefaultState()
     {
-        if(g_nn_save.IsAllocated() && g_nn_save->initialized)
+        if(g_nn_save->initialized)
         {
             SAVEUnmountSaveDir();
             g_nn_save->initialized = false;
         }
     }
-
-	class : public COSModule
-	{
-		public:
-		std::string_view GetName() override
-		{
-			return "nn_save";
-		}
-
-		void RPLUnmapped() override
-		{
-			s_rplData.Deallocate();
-		}
-
-		void RPLMapped() override
-		{
-			s_rplData.Allocate();
-			cafeExportRegister("nn_save", SAVEInit, LogType::Save);
-			cafeExportRegister("nn_save", SAVEInitSaveDir, LogType::Save);
-
-			cafeExportRegister("nn_save", SAVEGetSharedDataTitlePath, LogType::Save);
-			cafeExportRegister("nn_save", SAVEGetSharedSaveDataPath, LogType::Save);
-
-			cafeExportRegister("nn_save", SAVEGetFreeSpaceSize, LogType::Save);
-			cafeExportRegister("nn_save", SAVEGetFreeSpaceSizeAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEMakeDir, LogType::Save);
-			cafeExportRegister("nn_save", SAVEMakeDirAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVERemove, LogType::Save);
-			cafeExportRegister("nn_save", SAVERemoveAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEChangeDir, LogType::Save);
-			cafeExportRegister("nn_save", SAVEChangeDirAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVERename, LogType::Save);
-			cafeExportRegister("nn_save", SAVERenameAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEFlushQuota, LogType::Save);
-			cafeExportRegister("nn_save", SAVEFlushQuotaAsync, LogType::Save);
-
-			cafeExportRegister("nn_save", SAVEGetStat, LogType::Save);
-			cafeExportRegister("nn_save", SAVEGetStatAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEGetStatOtherApplication, LogType::Save);
-			cafeExportRegister("nn_save", SAVEGetStatOtherApplicationAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEGetStatOtherNormalApplication, LogType::Save);
-			cafeExportRegister("nn_save", SAVEGetStatOtherNormalApplicationAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEGetStatOtherNormalApplicationVariation, LogType::Save);
-			cafeExportRegister("nn_save", SAVEGetStatOtherNormalApplicationVariationAsync, LogType::Save);
-
-			cafeExportRegister("nn_save", SAVEOpenFile, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenFileAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenFileOtherApplication, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenFileOtherApplicationAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenFileOtherNormalApplication, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenFileOtherNormalApplicationAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenFileOtherNormalApplicationVariation, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenFileOtherNormalApplicationVariationAsync, LogType::Save);
-
-			cafeExportRegister("nn_save", SAVEOpenDir, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenDirAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenDirOtherApplication, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenDirOtherApplicationAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenDirOtherNormalApplication, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenDirOtherNormalApplicationVariation, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenDirOtherNormalApplicationAsync, LogType::Save);
-			cafeExportRegister("nn_save", SAVEOpenDirOtherNormalApplicationVariationAsync, LogType::Save);
-		};
-
-		void rpl_entry(uint32 moduleHandle, coreinit::RplEntryReason reason) override
-		{
-			if (reason == coreinit::RplEntryReason::Loaded)
-			{
-				ResetToDefaultState();
-			}
-			else if (reason == coreinit::RplEntryReason::Unloaded)
-			{
-				ResetToDefaultState();
-			}
-		}
-	}s_COSnnSaveModule;
-
-	COSModule* GetModule()
-	{
-		return &s_COSnnSaveModule;
-	}
 
 }
 }

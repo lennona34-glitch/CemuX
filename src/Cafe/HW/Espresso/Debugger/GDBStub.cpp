@@ -12,10 +12,6 @@
 #include "Cafe/HW/Espresso/EspressoISA.h"
 #include "Common/socket.h"
 
-#if BOOST_OS_UNIX
-#include <netinet/tcp.h>
-#endif
-
 #define GET_THREAD_ID(threadPtr) memory_getVirtualOffsetFromPointer(threadPtr)
 #define GET_THREAD_BY_ID(threadId) (OSThread_t*)memory_getPointerFromPhysicalOffset(threadId)
 
@@ -277,7 +273,7 @@ bool GDBServer::Initialize()
 
 	memset(&m_server_addr, 0, sizeof(m_server_addr));
 	m_server_addr.sin_family = AF_INET;
-	m_server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	m_server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	m_server_addr.sin_port = htons(m_port);
 
 	if (bind(m_server_socket, (sockaddr*)&m_server_addr, sizeof(m_server_addr)) == SOCKET_ERROR)
@@ -463,8 +459,9 @@ void GDBServer::HandleQuery(std::unique_ptr<CommandContext>& context) const
 	}
 	else if (query_cmd == "qOffsets")
 	{
+		const auto module_count = RPLLoader_GetModuleCount();
 		const auto module_list = RPLLoader_GetModuleList();
-		for (sint32 i = 0; i < module_list.size(); i++)
+		for (sint32 i = 0; i < module_count; i++)
 		{
 			const RPLModule* rpl = module_list[i];
 			if (rpl->entrypoint == m_entry_point)
@@ -551,10 +548,11 @@ void GDBServer::HandleQuery(std::unique_ptr<CommandContext>& context) const
 			library_list += R"(<?xml version="1.0"?>)";
 			library_list += "<library-list>";
 
+			const auto module_count = RPLLoader_GetModuleCount();
 			const auto module_list = RPLLoader_GetModuleList();
-			for (sint32 i = 0; i < module_list.size(); i++)
+			for (sint32 i = 0; i < module_count; i++)
 			{
-				library_list += fmt::format(R"(<library name="{}"><segment address="{:#x}"/></library>)", CommandContext::EscapeXMLString(module_list[i]->moduleName), module_list[i]->regionMappingBase_text.GetMPTR());
+				library_list += fmt::format(R"(<library name="{}"><segment address="{:#x}"/></library>)", CommandContext::EscapeXMLString(module_list[i]->moduleName2), module_list[i]->regionMappingBase_text.GetMPTR());
 			}
 			library_list += "</library-list>";
 

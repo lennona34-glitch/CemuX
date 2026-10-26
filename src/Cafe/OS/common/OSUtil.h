@@ -176,14 +176,14 @@ void cafeExportCallWrapper(PPCInterpreter_t* hCPU)
 		if(cemuLog_advancedPPCLoggingEnabled())
 		{
 			MPTR threadMPTR = memory_getVirtualOffsetFromPointer(coreinit::OSGetCurrentThread());
-			if constexpr (std::tuple_size_v<decltype(format_tup)> > 0)
+			if constexpr (std::tuple_size<decltype(format_tup)>::value > 0)
 				shouldLog = cemuLog_log(TLogType, "{}.{}{} # LR: {:#x} | Thread: {:#x}", TNames::GetLib(), TNames::GetFunc(), format_tup, hCPU->spr.LR, threadMPTR);
 			else
 				shouldLog = cemuLog_log(TLogType, "{}.{}() # LR: {:#x} | Thread: {:#x}", TNames::GetLib(), TNames::GetFunc(), hCPU->spr.LR, threadMPTR);
 		}
 		else
 		{
-			if constexpr (std::tuple_size_v<decltype(format_tup)> > 0)
+			if constexpr (std::tuple_size<decltype(format_tup)>::value > 0)
 			{
 				shouldLog = cemuLog_log(TLogType, "{}.{}{}", TNames::GetLib(), TNames::GetFunc(), format_tup);
 			}
@@ -192,7 +192,7 @@ void cafeExportCallWrapper(PPCInterpreter_t* hCPU)
 		}
 	}
 
-	if constexpr (!std::is_void_v<decltype(std::apply(fn, tup))>)
+	if constexpr (!std::is_void<decltype(std::apply(fn, tup))>::value)
 	{
 		// has non-void return type
 		decltype(auto) result = std::apply(fn, tup);
@@ -236,30 +236,9 @@ void cafeExportMakeWrapper(const char* libname, const char* funcname)
 	}
 
 template<auto fn>
-void cafeCallableExportWrapper(PPCInterpreter_t* hCPU)
-{
-	auto tup = cafeExportBuildArgTuple(hCPU, fn);
-	if constexpr (!std::is_void_v<decltype(std::apply(fn, tup))>)
-	{
-		// has non-void return type
-		decltype(auto) result = std::apply(fn, tup);
-		cafeExportParamWrapper::setReturnResult(hCPU, result);
-	}
-	else
-	{
-		// return type is void
-		std::apply(fn, tup);
-	}
-	// return from func
-	hCPU->instructionPointer = hCPU->spr.LR;
-}
-
-uint32 RPLLoader_MakePPCCallable(void(*ppcCallableExport)(struct PPCInterpreter_t* hCPU)); // declare to avoid having to include all of rpl.h
-
-template<auto fn>
 MPTR makeCallableExport()
 {
-	return RPLLoader_MakePPCCallable(&cafeCallableExportWrapper<fn>);
+	return PPCInterpreter_makeCallableExportDepr(&cafeExportCallWrapper<fn, "CALLABLE_EXPORT">);
 }
 
 void osLib_addVirtualPointer(const char* libraryName, const char* functionName, uint32 vPtr);

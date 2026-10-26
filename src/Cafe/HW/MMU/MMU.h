@@ -39,7 +39,6 @@ enum class MMU_MEM_AREA_ID
 	CPU_PER_CORE,
 
 	CEMU_PRIVATE,
-	IOSU_PRIVATE,
 };
 
 struct MMURange
@@ -126,7 +125,6 @@ extern MMURange mmuRange_CODECAVE;
 extern MMURange mmuRange_TEXT_AREA;
 extern MMURange mmuRange_MEM2;
 extern MMURange mmuRange_CEMU_AREA;
-extern MMURange mmuRange_IOSU_AREA;
 extern MMURange mmuRange_OVERLAY_AREA;
 extern MMURange mmuRange_FGBUCKET;
 extern MMURange mmuRange_TILINGAPERTURE;
@@ -186,16 +184,6 @@ bool memory_isAddressRangeAccessible(MPTR virtualAddress, uint32 size);
 #define CPU_swapEndianU64(_v) OSSwapInt64((uint64)(_v))
 #define CPU_swapEndianU32(_v) OSSwapInt32((uint32)(_v))
 #define CPU_swapEndianU16(_v) OSSwapInt16((uint16)(_v))
-#elif BOOST_OS_BSD
-#ifdef __OpenBSD__
-#define CPU_swapEndianU64(_v) swap64((uint64)(_v))
-#define CPU_swapEndianU32(_v) swap32((uint32)(_v))
-#define CPU_swapEndianU16(_v) swap16((uint16)(_v))
-#else // FreeBSD and NetBSD
-#define CPU_swapEndianU64(_v) bswap64((uint64)(_v))
-#define CPU_swapEndianU32(_v) bswap32((uint32)(_v))
-#define CPU_swapEndianU16(_v) bswap16((uint16)(_v))
-#endif
 #endif
 
 // C-style memory access, deprecated. Use memory_read<> and memory_write<> templates instead
@@ -273,7 +261,7 @@ namespace MMU
 
 	void WriteMMIO_32(PAddr address, uint32 value);
 	void WriteMMIO_16(PAddr address, uint16 value);
-	uint32 ReadMMIO_32(PAddr address);
+	uint16 ReadMMIO_32(PAddr address);
 	uint16 ReadMMIO_16(PAddr address);
 
 }

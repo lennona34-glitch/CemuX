@@ -1,6 +1,6 @@
 #pragma once
-
-enum class CafeConsoleRegion;
+#include "Common/betype.h"
+#include "config/CemuConfig.h" // for ConsoleRegion
 
 /* OpenSSL forward declarations */
 typedef struct ec_key_st EC_KEY;
@@ -13,17 +13,10 @@ namespace NCrypto
 	std::string base64Encode(const void* inputMem, size_t inputLen);
 	std::vector<uint8> base64Decode(std::string_view inputStr);
 	
-	/* key and iv helper struct */
+	/* key helper struct */
 	struct AesKey 
 	{
-		static constexpr size_t SIZE = 16;
-		uint8 b[SIZE];
-	};
-
-	struct AesIv
-	{
-		static constexpr size_t SIZE = 16;
-		uint8 iv[SIZE];
+		uint8 b[16];
 	};
 
 	/* ECC Certificate */

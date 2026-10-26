@@ -4,7 +4,6 @@
 #include "Infinity.h"
 #include "Skylander.h"
 #include "config/CemuConfig.h"
-#include "SkylanderXbox360.h"
 
 namespace nsyshid::backend::emulated
 {
@@ -29,15 +28,6 @@ namespace nsyshid::backend::emulated
 			auto device = std::make_shared<SkylanderPortalDevice>();
 			AttachDevice(device);
 		}
-	#ifdef HAS_LIBUSB
-		else if (auto usb_portal = FindDeviceById(0x1430, 0x1F17))
-		{
-			cemuLog_logDebug(LogType::Force, "Attaching Xbox 360 Portal");
-			// Add Skylander Xbox 360 Portal
-			auto device = std::make_shared<SkylanderXbox360PortalLibusb>(usb_portal);
-			AttachDevice(device);
-		}
-	#endif
 		if (GetConfig().emulated_usb_devices.emulate_infinity_base && !FindDeviceById(0x0E6F, 0x0129))
 		{
 			cemuLog_logDebug(LogType::Force, "Attaching Emulated Base");

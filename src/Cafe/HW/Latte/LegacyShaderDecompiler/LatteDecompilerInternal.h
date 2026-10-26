@@ -47,7 +47,7 @@ struct LatteDecompilerTEXInstruction
 	sint32 dstGpr;
 	sint8 dstSel[4];
 	// texture fetch
-	struct
+	struct  
 	{
 		sint32 textureIndex{};
 		sint32 samplerIndex{};
@@ -64,7 +64,7 @@ struct LatteDecompilerTEXInstruction
 	{
 		uint32 arrayBase{};
 		sint8 srcSelX{};
-		Latte::E_HWFMT format{};
+		uint32 format{};
 		uint8 nfa{};
 		uint8 isSigned{};
 	}memRead;
@@ -115,8 +115,13 @@ struct LatteDecompilerCFInstruction
 		cemu_assert_debug(!(instructionsALU.size() != 0 && instructionsTEX.size() != 0)); // make sure we haven't accidentally added the wrong instruction type
 	}
 
+#if BOOST_OS_WINDOWS
+	LatteDecompilerCFInstruction(LatteDecompilerCFInstruction& mE) = default;
+	LatteDecompilerCFInstruction(LatteDecompilerCFInstruction&& mE) = default;
+#else
 	LatteDecompilerCFInstruction(const LatteDecompilerCFInstruction& mE) = default;
 	LatteDecompilerCFInstruction(LatteDecompilerCFInstruction&& mE) = default;
+#endif
 
 	LatteDecompilerCFInstruction& operator=(LatteDecompilerCFInstruction&& mE) = default;
 };
@@ -211,7 +216,7 @@ struct LatteDecompilerShaderContext
 		bool genIntReg; // if set, generate R*i register variables
 		bool useArrayGPRs; // if set, an array is used to represent GPRs instead of individual variables
 	}typeTracker;
-	// analyzer
+	// analyzer	
 	struct
 	{
 		// general
@@ -237,7 +242,6 @@ struct LatteDecompilerShaderContext
 		uint8 gprUseMask[(LATTE_NUM_GPR + 7) / 8]; // 1 bit per GPR, set if GPR is read/written anywhere in the program (ignores GPR accesses with relative index)
 		bool hasStreamoutWrite; // stream-out CF instructions are used
 		bool hasRedcCUBE; // has cube reduction instruction
-		bool hasFragCoordAccess{false}; // accesses gl_FragCoord
 		bool modifiesPixelActiveState; // set if the active mask is changed anywhere in the shader (If false, we can skip active mask checks)
 		bool usesIntegerValues; // set if the shader uses any kind of integer instruction or integer-based GPR/AR access
 		sint32 activeStackMaxDepth; // maximum depth of pixel state stack
@@ -256,10 +260,7 @@ struct LatteDecompilerShaderContext
 	// emitter
 	bool hasUniformVarBlock;
 	sint32 currentBindingPointVK{};
-	sint32 currentBufferBindingPointMTL{};
-	sint32 currentTextureBindingPointMTL{};
 	struct ALUClauseTemporariesState* aluPVPSState{nullptr};
-	
 	// misc
 	std::vector<LatteDecompilerSubroutineInfo> list_subroutines;
 };
@@ -267,9 +268,6 @@ struct LatteDecompilerShaderContext
 void LatteDecompiler_analyze(LatteDecompilerShaderContext* shaderContext, LatteDecompilerShader* shader);
 void LatteDecompiler_analyzeDataTypes(LatteDecompilerShaderContext* shaderContext);
 void LatteDecompiler_emitGLSLShader(LatteDecompilerShaderContext* shaderContext, LatteDecompilerShader* shader);
-#ifdef ENABLE_METAL
-void LatteDecompiler_emitMSLShader(LatteDecompilerShaderContext* shaderContext, LatteDecompilerShader* shader);
-#endif
 
 void LatteDecompiler_cleanup(LatteDecompilerShaderContext* shaderContext);
 

@@ -581,8 +581,6 @@ namespace iosu
 
 	namespace acp
 	{
-		constinit IOSUStaticData s_staticData;
-		iosu::nn::IPCService::WorkArea s_ipcServiceWorkArea(s_staticData);
 
 		uint64 _ACPGetTimestamp()
 		{
@@ -782,9 +780,9 @@ namespace iosu
 		class AcpMainService : public iosu::nn::IPCService
 		{
 		  public:
-			AcpMainService() : iosu::nn::IPCService("/dev/acp_main", s_ipcServiceWorkArea) {}
+			AcpMainService() : iosu::nn::IPCService("/dev/acp_main") {}
 
-			nnResult ServiceCall(IPCServiceCall& serviceCall) override
+			nnResult ServiceCall(uint32 serviceId, void* request, void* response) override
 			{
 				cemuLog_log(LogType::Force, "Unsupported service call to /dev/acp_main");
 				cemu_assert_unimplemented();
@@ -798,14 +796,12 @@ namespace iosu
 		{
 			void TitleStart() override
 			{
-				s_staticData.Allocate();
 				gACPMainService.Start();
 				// gACPMainService.SetTimerUpdate(1000); // call TimerUpdate() once a second
 			}
 			void TitleStop() override
 			{
 				gACPMainService.Stop();
-				s_staticData.Deallocate();
 			}
 		}sIOSUModuleNNACP;
 

@@ -11,14 +11,9 @@
 void gx2Export_GX2SetPixelShader(PPCInterpreter_t* hCPU)
 {
 	cemuLog_log(LogType::GX2, "GX2SetPixelShader(0x{:08x})", hCPU->gpr[3]);
+	GX2ReserveCmdSpace(100);
+
 	GX2PixelShader_t* pixelShader = (GX2PixelShader_t*)memory_getPointerFromVirtualOffset(hCPU->gpr[3]);
-
-	uint32 numInputs = _swapEndianU32(pixelShader->regs[4]);
-	if( numInputs > 0x20 )
-		numInputs = 0x20;
-
-	GX2::GX2ReserveCmdSpace(26 + numInputs);
-
 	MPTR shaderProgramAddr;
 	uint32 shaderProgramSize;
 
@@ -49,6 +44,9 @@ void gx2Export_GX2SetPixelShader(PPCInterpreter_t* hCPU)
 		_swapEndianU32(pixelShader->regs[2]),
 		_swapEndianU32(pixelShader->regs[3]));
 	// setup pixel shader extended inputs control
+	uint32 numInputs = _swapEndianU32(pixelShader->regs[4]);
+	if( numInputs > 0x20 )
+		numInputs = 0x20;
 	gx2WriteGather_submitU32AsBE(pm4HeaderType3(IT_SET_CONTEXT_REG, 1+numInputs));
 	gx2WriteGather_submitU32AsBE(mmSPI_PS_INPUT_CNTL_0-0xA000);
 	for(uint32 i=0; i<numInputs; i++)
@@ -81,17 +79,9 @@ void gx2Export_GX2SetPixelShader(PPCInterpreter_t* hCPU)
 void gx2Export_GX2SetGeometryShader(PPCInterpreter_t* hCPU)
 {
 	cemuLog_log(LogType::GX2, "GX2SetGeometryShader(0x{:08x})", hCPU->gpr[3]);
+	GX2ReserveCmdSpace(100);
 
 	GX2GeometryShader_t* geometryShader = (GX2GeometryShader_t*)memory_getPointerFromVirtualOffset(hCPU->gpr[3]);
-	uint32 numOutputIds = _swapEndianU32(geometryShader->regs[7]);
-	numOutputIds = std::min<uint32>(numOutputIds, 0xA);
-	uint32 reserveSize = 38; // 38 fixed parameters
-	if (numOutputIds != 0)
-		reserveSize += 2 + numOutputIds;
-	if( _swapEndianU32(geometryShader->useStreamout) != 0 )
-		reserveSize += 2 + 12;
-
-	GX2::GX2ReserveCmdSpace(reserveSize);
 
 	MPTR shaderProgramAddr;
 	uint32 shaderProgramSize;
@@ -138,7 +128,6 @@ void gx2Export_GX2SetGeometryShader(PPCInterpreter_t* hCPU)
 	
 	if( _swapEndianU32(geometryShader->useStreamout) != 0 )
 	{
-		// todo - IT_EVENT_WRITE packet here
 		// stride 0
 		gx2WriteGather_submitU32AsBE(pm4HeaderType3(IT_SET_CONTEXT_REG, 2));
 		gx2WriteGather_submitU32AsBE(mmVGT_STRMOUT_VTX_STRIDE_0-0xA000);
@@ -191,6 +180,8 @@ void gx2Export_GX2SetGeometryShader(PPCInterpreter_t* hCPU)
 	gx2WriteGather_submitU32AsBE(_swapEndianU32(geometryShader->regs[3]));
 
 	// GS outputs
+	uint32 numOutputIds = _swapEndianU32(geometryShader->regs[7]);
+	numOutputIds = std::min<uint32>(numOutputIds, 0xA);
 	if( numOutputIds != 0 )
 	{
 		gx2WriteGather_submitU32AsBE(pm4HeaderType3(IT_SET_CONTEXT_REG, 1+numOutputIds));
@@ -263,7 +254,8 @@ void gx2Export_GX2SetComputeShader(PPCInterpreter_t* hCPU)
 		shaderPtr = computeShader->rBuffer.GetVirtualAddr();
 		shaderSize = computeShader->rBuffer.GetSize();
 	}
-	GX2::GX2ReserveCmdSpace(0x11);
+
+	GX2ReserveCmdSpace(0x11);
 
 	gx2WriteGather_submit(pm4HeaderType3(IT_SET_CONTEXT_REG, 6),
 		mmSQ_PGM_START_ES-0xA000,
@@ -280,7 +272,7 @@ void gx2Export_GX2SetComputeShader(PPCInterpreter_t* hCPU)
 
 void _GX2SubmitUniformBlock(uint32 registerBase, uint32 index, MPTR virtualAddress, uint32 size)
 {
-	GX2::GX2ReserveCmdSpace(9);
+	GX2ReserveCmdSpace(9);
 	gx2WriteGather_submit(pm4HeaderType3(IT_SET_RESOURCE, 8),
 		registerBase + index * 7,
 		memory_virtualToPhysical(virtualAddress),
@@ -315,13 +307,48 @@ void gx2Export_GX2SetGeometryUniformBlock(PPCInterpreter_t* hCPU)
 
 void gx2Export_GX2RSetVertexUniformBlock(PPCInterpreter_t* hCPU)
 {
-	GX2::GX2ReserveCmdSpace(9);
+	GX2ReserveCmdSpace(9);
 
 	GX2RBuffer* bufferPtr = (GX2RBuffer*)memory_getPointerFromVirtualOffset(hCPU->gpr[3]);
 	uint32 index = hCPU->gpr[4];
 	uint32 offset = hCPU->gpr[5];
 
 	_GX2SubmitUniformBlock(mmSQ_VTX_UNIFORM_BLOCK_START - mmSQ_TEX_RESOURCE_WORD0, index, bufferPtr->GetVirtualAddr() + offset, bufferPtr->GetSize() - offset);
+
+	osLib_returnFromFunction(hCPU, 0);
+}
+
+void gx2Export_GX2SetShaderModeEx(PPCInterpreter_t* hCPU)
+{
+	GX2ReserveCmdSpace(8+4);
+	uint32 mode = hCPU->gpr[3];
+
+	uint32 sqConfig = hCPU->gpr[3] == 0 ? 4 : 0;
+	if (mode == GX2_SHADER_MODE_COMPUTE_SHADER)
+		sqConfig |= 0xE4000000; // ES/GS/PS priority?
+	// todo - other sqConfig bits
+
+	gx2WriteGather_submit((uint32)(pm4HeaderType3(IT_SET_CONFIG_REG, 7)),
+			(uint32)(mmSQ_CONFIG - 0x2000),
+			sqConfig,
+			0, // ukn / todo
+			0, // ukn / todo
+			0, // ukn / todo
+			0, // ukn / todo
+			0 // ukn / todo
+		);
+
+	// if not GS, then update mmVGT_GS_MODE
+	if( mode != GX2_SHADER_MODE_GEOMETRY_SHADER )
+	{
+		// update VGT_GS_MODE only if no geometry shader is used (else this register is already set by GX2SetGeometryShader)
+		gx2WriteGather_submitU32AsBE(pm4HeaderType3(IT_SET_CONTEXT_REG, 2));
+		gx2WriteGather_submitU32AsBE(Latte::REGADDR::VGT_GS_MODE-0xA000);
+		if (mode == GX2_SHADER_MODE_COMPUTE_SHADER)
+			gx2WriteGather_submitU32AsBE(Latte::LATTE_VGT_GS_MODE().set_MODE(Latte::LATTE_VGT_GS_MODE::E_MODE::SCENARIO_G).set_COMPUTE_MODE(Latte::LATTE_VGT_GS_MODE::E_COMPUTE_MODE::ON).set_PARTIAL_THD_AT_EOI(true).getRawValueBE());
+		else
+			gx2WriteGather_submitU32AsBE(_swapEndianU32(0));
+	}
 
 	osLib_returnFromFunction(hCPU, 0);
 }

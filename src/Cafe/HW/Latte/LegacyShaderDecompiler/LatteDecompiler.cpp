@@ -10,9 +10,7 @@
 #include "Cafe/HW/Latte/Core/FetchShader.h"
 #include "Cafe/HW/Latte/Core/LattePerformanceMonitor.h"
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
-#ifdef ENABLE_VULKAN
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h"
-#endif
 #include "util/helpers/helpers.h"
 
 // parse instruction and if valid append it to instructionList
@@ -302,7 +300,6 @@ bool LatteDecompiler_IsALUTransInstruction(bool isOP3, uint32 opcode)
 
 	if( opcode == ALU_OP2_INST_COS ||
 		opcode == ALU_OP2_INST_SIN ||
-		opcode == ALU_OP2_INST_RECIP_CLAMPED ||
 		opcode == ALU_OP2_INST_RECIP_FF ||
 		opcode == ALU_OP2_INST_RECIP_IEEE ||
 		opcode == ALU_OP2_INST_RECIPSQRT_IEEE ||
@@ -326,8 +323,8 @@ bool LatteDecompiler_IsALUTransInstruction(bool isOP3, uint32 opcode)
 	}
 	else if( opcode == ALU_OP2_INST_MOV ||
 		opcode == ALU_OP2_INST_ADD ||
-		opcode == ALU_OP2_INST_NOP ||
-		opcode == ALU_OP2_INST_MUL ||
+		opcode == ALU_OP2_INST_NOP || 
+		opcode == ALU_OP2_INST_MUL || 
 		opcode == ALU_OP2_INST_DOT4 ||
 		opcode == ALU_OP2_INST_DOT4_IEEE ||
 		opcode == ALU_OP2_INST_MAX || // Not sure if MIN/MAX are non-transcendental?
@@ -929,10 +926,10 @@ void LatteDecompiler_ParseTEXClause(LatteDecompilerShader* shaderContext, LatteD
 				texInstruction.dstSel[2] = dstSelZ;
 				texInstruction.dstSel[3] = dstSelW;
 
-				texInstruction.memRead.format = static_cast<Latte::E_HWFMT>(dataFormat);
+				texInstruction.memRead.format = dataFormat;
 				texInstruction.memRead.nfa = nfa;
 				texInstruction.memRead.isSigned = isSigned;
-
+	
 				cfInstruction->instructionsTEX.emplace_back(texInstruction);
 			}
 			else
@@ -1039,7 +1036,7 @@ void _LatteDecompiler_GenerateDataForFastAccess(LatteDecompilerShader* shader)
 		else
 		{
 			LatteFastAccessRemappedUniformEntry_buffer_t entryBuf;
-			uint32 kcacheBankIdOffset = entry->kcacheBankId * (7 * 4);
+			uint32 kcacheBankIdOffset = entry->kcacheBankId* (7 * 4);
 			entryBuf.indexOffset = entry->index * 16;
 			entryBuf.mappedIndexOffset = entry->mappedIndex * 16;
 			// find or create buffer group
@@ -1050,7 +1047,7 @@ void _LatteDecompiler_GenerateDataForFastAccess(LatteDecompilerShader* shader)
 			}
 			else
 			{
-				shader->list_remappedUniformEntries_bufferGroups.emplace_back(entry->kcacheBankId, kcacheBankIdOffset).entries.emplace_back(entryBuf);
+				shader->list_remappedUniformEntries_bufferGroups.emplace_back(kcacheBankIdOffset).entries.emplace_back(entryBuf);
 			}
 		}
 	}
@@ -1069,29 +1066,11 @@ void _LatteDecompiler_Process(LatteDecompilerShaderContext* shaderContext, uint8
 		LatteDecompiler_analyze(shaderContext, shaderContext->shader);
 	if (shaderContext->shader->hasError == false)
 		LatteDecompiler_analyzeDataTypes(shaderContext);
-	// check for usage errors
-	if ( shaderContext->analyzer.uniformRegisterAccessTracker.HasAccess() && shaderContext->analyzer.uniformBufferAccessTracker->HasAccess() )
-	{
-		cemuLog_log(LogType::APIErrors, "Shader {:08x} accesses both uniform registers and uniform blocks. Latte does not support using both at the same time (uniform mode is configured via GX2SetShaderModeEx)", shaderContext->shaderBaseHash);
-	}
 	// emit code
 	if (shaderContext->shader->hasError == false)
-	{
-		if (g_renderer->GetType() == RendererAPI::OpenGL || g_renderer->GetType() == RendererAPI::Vulkan)
-		{
-#if defined(ENABLE_OPENGL) || defined(ENABLE_VULKAN)
-			LatteDecompiler_emitGLSLShader(shaderContext, shaderContext->shader);
-#endif
-		}
-		if (g_renderer->GetType() == RendererAPI::Metal)
-		{
-#ifdef ENABLE_METAL
-			LatteDecompiler_emitMSLShader(shaderContext, shaderContext->shader);
-#endif
-		}
-	}
+		LatteDecompiler_emitGLSLShader(shaderContext, shaderContext->shader);
 	LatteDecompiler_cleanup(shaderContext);
-	// fast access
+	// fast access 
 	_LatteDecompiler_GenerateDataForFastAccess(shaderContext->shader);
 }
 

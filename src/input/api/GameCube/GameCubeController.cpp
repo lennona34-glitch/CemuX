@@ -1,6 +1,6 @@
 #include "input/api/GameCube/GameCubeController.h"
 
-#if defined(HAS_GAMECUBE) && HAS_GAMECUBE && defined(HAS_LIBUSB)
+#ifdef HAS_GAMECUBE
 
 GameCubeController::GameCubeController(uint32 adapter, uint32 index)
 	: base_type(fmt::format("{}_{}", adapter, index), fmt::format("Controller {}", index + 1)), m_adapter(adapter),

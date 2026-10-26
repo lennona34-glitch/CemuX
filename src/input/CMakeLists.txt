@@ -15,10 +15,18 @@ add_library(CemuInput
 	api/DSU/DSUControllerProvider.h
 	api/DSU/DSUMessages.h
 	api/DSU/DSUMessages.cpp
+	api/SDL/SDLController.cpp
+	api/SDL/SDLControllerProvider.cpp
+	api/SDL/SDLController.h
+	api/SDL/SDLControllerProvider.h
 	api/Keyboard/KeyboardControllerProvider.h
 	api/Keyboard/KeyboardControllerProvider.cpp
 	api/Keyboard/KeyboardController.cpp
 	api/Keyboard/KeyboardController.h
+	api/GameCube/GameCubeController.cpp
+	api/GameCube/GameCubeControllerProvider.h
+	api/GameCube/GameCubeControllerProvider.cpp
+	api/GameCube/GameCubeController.h
 	emulated/ProController.cpp
 	emulated/EmulatedController.h
 	emulated/EmulatedController.cpp
@@ -34,17 +42,6 @@ add_library(CemuInput
 )
 
 set_property(TARGET CemuInput PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-
-cemu_use_precompiled_header(CemuInput)
-
-if (ENABLE_LIBUSB)
-	target_sources(CemuInput PRIVATE
-		api/GameCube/GameCubeController.cpp
-		api/GameCube/GameCubeControllerProvider.h
-		api/GameCube/GameCubeControllerProvider.cpp
-		api/GameCube/GameCubeController.h
-	)
-endif()
 
 if(WIN32)
 	# XInput
@@ -64,7 +61,7 @@ if(WIN32)
 	)
 endif()
 
-if (SUPPORTS_WIIMOTE)
+if (ENABLE_WIIMOTE)
 	target_compile_definitions(CemuInput PUBLIC SUPPORTS_WIIMOTE)
 	target_sources(CemuInput PRIVATE
 			api/Wiimote/WiimoteControllerProvider.h
@@ -73,38 +70,40 @@ if (SUPPORTS_WIIMOTE)
 			api/Wiimote/NativeWiimoteController.h
 			api/Wiimote/NativeWiimoteController.cpp
 			api/Wiimote/WiimoteDevice.h
+			api/Wiimote/hidapi/HidapiWiimote.cpp
+			api/Wiimote/hidapi/HidapiWiimote.h
 	)
-	if (ENABLE_HIDAPI)
+	if (UNIX AND NOT APPLE)
 		target_sources(CemuInput PRIVATE
-				api/Wiimote/hidapi/HidapiWiimote.cpp
-				api/Wiimote/hidapi/HidapiWiimote.h)
-	endif ()
-
-	if (ENABLE_BLUEZ)
-		target_sources(CemuInput PRIVATE
-				api/Wiimote/l2cap/L2CapWiimote.cpp
-				api/Wiimote/l2cap/L2CapWiimote.h)
+			api/Wiimote/l2cap/L2CapWiimote.cpp
+			api/Wiimote/l2cap/L2CapWiimote.h)
 	endif()
 endif ()
 
 
-if(ENABLE_SDL)
-	target_sources(CemuInput PRIVATE
-		api/SDL/SDLController.cpp
-		api/SDL/SDLControllerProvider.cpp
-		api/SDL/SDLController.h
-		api/SDL/SDLControllerProvider.h
-	)
-	target_link_libraries(CemuInput PRIVATE	SDL3::SDL3)
-endif()
-
 target_include_directories(CemuInput PUBLIC "../")
 
 target_link_libraries(CemuInput PRIVATE
+	CemuCafe
 	CemuCommon
+	CemuConfig
 	CemuGui
+	CemuUtil
+	Boost::headers
+	Boost::program_options
+	glm::glm
+	pugixml::pugixml
+	SDL2::SDL2
 )
+if (ENABLE_HIDAPI)
+	target_link_libraries(CemuInput PRIVATE hidapi::hidapi)
+endif()
 
-if (ENABLE_BLUEZ)
+if (ENABLE_WXWIDGETS)
+	target_link_libraries(CemuInput PRIVATE wx::base wx::core)
+endif()
+
+
+if (UNIX AND NOT APPLE)
 	target_link_libraries(CemuInput PRIVATE bluez::bluez)
 endif ()

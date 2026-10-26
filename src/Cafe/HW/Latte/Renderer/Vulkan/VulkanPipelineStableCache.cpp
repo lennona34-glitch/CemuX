@@ -277,9 +277,8 @@ void VulkanPipelineStableCache::LoadPipelineFromCache(std::span<uint8> fileData)
 	m_pipelineIsCachedLock.unlock();
 	// compile
 	{
-		PipelineCompiler pipelineCompiler;
-		bool requiresRobustBufferAccess = PipelineCompiler::CalcRobustBufferAccessRequirement(vertexShader, pixelShader, geometryShader);
-		if (!pipelineCompiler.InitFromCurrentGPUState(pipelineInfo, *lcr, renderPass, requiresRobustBufferAccess))
+		PipelineCompiler pp;
+		if (!pp.InitFromCurrentGPUState(pipelineInfo, *lcr, renderPass))
 		{
 			s_spinlockSharedInternal.lock();
 			delete lcr;
@@ -287,7 +286,8 @@ void VulkanPipelineStableCache::LoadPipelineFromCache(std::span<uint8> fileData)
 			s_spinlockSharedInternal.unlock();
 			return;
 		}
-		pipelineCompiler.Compile(true, true, false);
+		pp.Compile(true, true, false);
+		// destroy pp early
 	}
 	// on success, calculate pipeline hash and flag as present in cache
 	uint64 pipelineBaseHash = vertexShader->baseHash;

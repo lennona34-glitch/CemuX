@@ -45,14 +45,14 @@
 
 #define HLE_MODULE_PTR		((RPLModule*)-1)
 
-struct RPLFileRelocEntry
+typedef struct
 {
 	/* +0x00 */ uint32be relocOffset;
 	/* +0x04 */ uint32be symbolIndexAndType;
 	/* +0x08 */ uint32be relocAddend;
-};
+}rplRelocNew_t;
 
-struct RPLFileSectionEntry
+typedef struct
 {
 	/* +0x00 */ uint32be nameOffset;
 	/* +0x04 */ uint32be type;
@@ -63,10 +63,10 @@ struct RPLFileSectionEntry
 	/* +0x18 */ uint32be symtabSectionIndex;
 	/* +0x1C */ uint32be relocTargetSectionIndex;
 	/* +0x20 */ uint32be alignment;
-	/* +0x24 */ uint32be symbolEntrySize; // for symtab: Size of each symbol entry
-};
+	/* +0x24 */ uint32be ukn24; // for symtab: Size of each symbol entry
+}rplSectionEntryNew_t;
 
-struct RPLFileHeader
+typedef struct
 {
 	/* +0x00 */ uint32be magic1;
 	/* +0x04 */ uint8    version04; // probably version?
@@ -92,12 +92,13 @@ struct RPLFileHeader
 	/* +0x2E */ uint16be sectionTableEntrySize;
 	/* +0x30 */ uint16be sectionTableEntryCount;
 	/* +0x32 */ uint16be nameSectionIndex;
-};
+}rplHeaderNew_t;
 
-static_assert(offsetof(RPLFileHeader, dataRegionSize) == 0xC);
-static_assert(offsetof(RPLFileHeader, programHeaderTableEntrySize) == 0x2A);
+static_assert(offsetof(rplHeaderNew_t, dataRegionSize) == 0xC);
+static_assert(offsetof(rplHeaderNew_t, programHeaderTableEntrySize) == 0x2A);
 
-struct RPLFileInfoData
+
+typedef struct
 {
 	/* +0x00 */ uint32be fileInfoMagic; // always 0xCAFE0402
 	/* +0x04 */ uint32be textRegionSize; // text region size
@@ -112,7 +113,7 @@ struct RPLFileInfoData
 	/* +0x28 */ uint32be sdataBase2;
 	/* +0x2C */ uint32be ukn2C;
 	/* +0x30 */ uint32be ukn30;
-	/* +0x34 */ uint32be flags;
+	/* +0x34 */ uint32be ukn34;
 	/* +0x38 */ uint32be ukn38;
 	/* +0x3C */ uint32be ukn3C;
 	/* +0x40 */ uint32be minimumToolkitVersion;
@@ -122,49 +123,55 @@ struct RPLFileInfoData
 	/* +0x50 */ uint32be ukn50;
 	/* +0x54 */ uint32be ukn54;
 	/* +0x58 */ sint16be tlsModuleIndex;
-};
+}RPLFileInfoData;
 
 static_assert(offsetof(RPLFileInfoData, tlsModuleIndex) == 0x58);
 
-struct RPLSectionAddressEntry
-{
-	void* ptr;
-};
 
-struct RPLFileExportTableEntry
+typedef struct
+{
+	//uint32 address;
+	void* ptr;
+}rplSectionAddressEntry_t;
+
+typedef struct
 {
 	uint32be virtualOffset;
 	uint32be nameOffset;
-};
+}rplExportTableEntry_t;
 
 struct RPLModule
 {
-	RPLFileHeader rplHeader;
-	std::vector<RPLFileSectionEntry> sectionTable;
+	uint32 ukn00; // pointer to shared memory region? (0xEFE01000)
+	uint32 ukn04; // related to text region size?
+	uint32 padding14;
+	uint32 padding18;
+	rplHeaderNew_t rplHeader;
+	rplSectionEntryNew_t* sectionTablePtr; // copy of section table
+
 	uint32 entrypoint;
+
+	MPTR textRegionTemp; // temporary memory for text section?
 
 	MEMPTR<void> regionMappingBase_text; // base destination address for text region
 	MPTR regionMappingBase_data; // base destination address for data region
 	MPTR regionMappingBase_loaderInfo; // base destination address for loaderInfo region
-	MEMPTR<char> ppcName; // name of the module in PPC memory
 	uint8* tempRegionPtr;
 	uint32 tempRegionAllocSize;
 
 	uint32 exportDCount;
-	RPLFileExportTableEntry* exportDDataPtr;
+	rplExportTableEntry_t* exportDDataPtr;
 	uint32 exportFCount;
-	RPLFileExportTableEntry* exportFDataPtr;
+	rplExportTableEntry_t* exportFDataPtr;
 
-	std::string moduleName;
+	std::string moduleName2;
 	
-	std::vector<RPLSectionAddressEntry> sectionAddressTable;
+	std::vector<rplSectionAddressEntry_t> sectionAddressTable2;
 
 	uint32 tlsStartAddress;
 	uint32 tlsEndAddress;
 	uint32 regionSize_text;
-	uint32 regionOrigAddr_text;
 	uint32 regionSize_data;
-	uint32 regionOrigAddr_data;
 	uint32 regionSize_loaderInfo;
 
 	uint32 patchCRC; // Cemuhook style module crc for patches.txt
@@ -191,8 +198,6 @@ struct RPLModule
 
 		uint32 sdataBase1;
 		uint32 sdataBase2;
-		
-		uint32 flags;
 	}fileInfo;
 	// parsed CRC
 	std::vector<uint32> crcTable;
@@ -202,11 +207,6 @@ struct RPLModule
 		if (sectionIndex >= crcTable.size())
 			return 0;
 		return crcTable[sectionIndex];
-	}
-	
-	bool IsRPX() const
-	{
-	    return fileInfo.flags & 2;
 	}
 
 	// state
@@ -220,18 +220,18 @@ struct RPLModule
 	// replaces rplData ptr
 	std::span<uint8> RPLRawData;
 
+	bool debugSectionLoadMask[128] = { false };
 	bool hasError{ false };
+
 };
 
 struct RPLDependency
 {
-	std::string moduleName;
-	bool isMainExecutable{false};
-	bool loadAttempted{false};
-	bool hleEntrypointCalled{false};
-	bool isCafeOSModule{false}; // name is a known Cafe OS system RPL
-	RPLModule* rplLoaderContext{}; // context of loaded module, can be nullptr for HLE COS modules
-	class COSModule* rplHLEModule{}; // set if this is a HLE module
+	char modulename[RPL_MODULE_NAME_LENGTH];
+	char filepath[RPL_MODULE_PATH_LENGTH];
+	bool loadAttempted;
+	bool isCafeOSModule; // name is a known Cafe OS RPL
+	RPLModule* rplLoaderContext; // context of loaded module, can be nullptr for HLE COS modules
 	sint32 referenceCount;
 	uint32 coreinitHandle; // fake handle for coreinit
 	sint16 tlsModuleIndex; // tls module index assigned to this dependency
@@ -239,4 +239,4 @@ struct RPLDependency
 
 RPLModule* RPLLoader_FindModuleByCodeAddr(uint32 addr);
 RPLModule* RPLLoader_FindModuleByDataAddr(uint32 addr);
-RPLModule* RPLLoader_FindModuleByName(std::string moduleName);
+RPLModule* RPLLoader_FindModuleByName(std::string module);

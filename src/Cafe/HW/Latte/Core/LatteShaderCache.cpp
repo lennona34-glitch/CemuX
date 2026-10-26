@@ -6,20 +6,12 @@
 #include "Cafe/HW/Latte/Core/FetchShader.h"
 #include "Cemu/FileCache/FileCache.h"
 #include "Cafe/GameProfile/GameProfile.h"
-#include "WindowSystem.h"
+#include "gui/guiWrapper.h"
 
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
-#ifdef ENABLE_OPENGL
 #include "Cafe/HW/Latte/Renderer/OpenGL/RendererShaderGL.h"
-#endif
-#ifdef ENABLE_VULKAN
 #include "Cafe/HW/Latte/Renderer/Vulkan/RendererShaderVk.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanPipelineStableCache.h"
-#endif
-#ifdef ENABLE_METAL
-#include "Cafe/HW/Latte/Renderer/Metal/RendererShaderMtl.h"
-#include "Cafe/HW/Latte/Renderer/Metal/MetalPipelineCache.h"
-#endif
 
 #include <imgui.h>
 #include "imgui/imgui_extension.h"
@@ -32,6 +24,7 @@
 #include "Cafe/HW/Latte/Common/ShaderSerializer.h"
 #include "util/helpers/Serializer.h"
 
+#include <wx/msgdlg.h>
 #include <audio/IAudioAPI.h>
 #include <util/bootSound/BootSoundReader.h>
 #include <thread>
@@ -51,7 +44,7 @@ struct
 	sint32 pixelShaderCount;
 }shaderCacheScreenStats;
 
-struct
+struct  
 {
 	ImTextureID textureTVId;
 	ImTextureID textureDRCId;
@@ -72,9 +65,11 @@ FileCache* s_shaderCacheGeneric = nullptr;	// contains hardware and version inde
 #define SHADER_CACHE_TYPE_PIXEL					(2)
 
 bool LatteShaderCache_readSeparableShader(uint8* shaderInfoData, sint32 shaderInfoSize);
-void LatteShaderCache_LoadPipelineCache(uint64 cacheTitleId);
+void LatteShaderCache_LoadVulkanPipelineCache(uint64 cacheTitleId);
 bool LatteShaderCache_updatePipelineLoadingProgress();
 void LatteShaderCache_ShowProgress(const std::function <bool(void)>& loadUpdateFunc, bool isPipelines);
+
+void LatteShaderCache_handleDeprecatedCacheFiles(fs::path pathGeneric, fs::path pathGenericPre1_25_0, fs::path pathGenericPre1_16_0);
 
 struct
 {
@@ -214,7 +209,7 @@ class BootSoundPlayer
 
 		try
 		{
-			bootSndAudioDev = IAudioAPI::CreateDeviceFromConfig(IAudioAPI::AudioType::TV, sampleRate, nChannels, samplesPerBlock, bitsPerSample);
+			bootSndAudioDev = IAudioAPI::CreateDeviceFromConfig(true, sampleRate, nChannels, samplesPerBlock, bitsPerSample);
 			if(!bootSndAudioDev)
 				return;
 		}
@@ -277,24 +272,10 @@ static BootSoundPlayer g_bootSndPlayer;
 
 void LatteShaderCache_finish()
 {
-	switch (g_renderer->GetType())
-	{
-#ifdef ENABLE_VULKAN
-	case RendererAPI::Vulkan:
+	if (g_renderer->GetType() == RendererAPI::Vulkan)
 		RendererShaderVk::ShaderCacheLoading_end();
-		return;
-#endif
-#ifdef ENABLE_OPENGL
-	case RendererAPI::OpenGL:
+	else if (g_renderer->GetType() == RendererAPI::OpenGL)
 		RendererShaderGL::ShaderCacheLoading_end();
-		return;
-#endif
-#ifdef ENABLE_METAL
-	case RendererAPI::Metal:
-		RendererShaderMtl::ShaderCacheLoading_end();
-		return;
-#endif
-	}
 }
 
 uint32 LatteShaderCache_getShaderCacheExtraVersion(uint64 titleId)
@@ -373,37 +354,16 @@ void LatteShaderCache_Load()
 	fs::create_directories(ActiveSettings::GetCachePath("shaderCache/transferable"), ec);
 	fs::create_directories(ActiveSettings::GetCachePath("shaderCache/precompiled"), ec);
 	// initialize renderer specific caches
-	switch(g_renderer->GetType())
-	{
-#ifdef ENABLE_VULKAN
-	case RendererAPI::Vulkan:
+	if (g_renderer->GetType() == RendererAPI::Vulkan)
 		RendererShaderVk::ShaderCacheLoading_begin(cacheTitleId);
-		break;
-#endif
-#ifdef ENABLE_OPENGL
-	case RendererAPI::OpenGL:
+	else if (g_renderer->GetType() == RendererAPI::OpenGL)
 		RendererShaderGL::ShaderCacheLoading_begin(cacheTitleId);
-		break;
-#endif
-#ifdef ENABLE_METAL
-	case RendererAPI::Metal:
-		RendererShaderMtl::ShaderCacheLoading_begin(cacheTitleId);
-		break;
-#endif
-	}
-
 	// get cache file name
-	fs::path pathGeneric;
-	switch(g_renderer->GetType())
-	{
-	case RendererAPI::Metal:
-	    pathGeneric = ActiveSettings::GetCachePath("shaderCache/transferable/{:016x}_mtlshaders.bin", cacheTitleId);
-		break;
-	default:
-	    pathGeneric = ActiveSettings::GetCachePath("shaderCache/transferable/{:016x}_shaders.bin", cacheTitleId);
-		break;
-	}
+	const auto pathGeneric = ActiveSettings::GetCachePath("shaderCache/transferable/{:016x}_shaders.bin", cacheTitleId);
+	const auto pathGenericPre1_25_0 = ActiveSettings::GetCachePath("shaderCache/transferable/{:016x}.bin", cacheTitleId); // before 1.25.0
+	const auto pathGenericPre1_16_0 = ActiveSettings::GetCachePath("shaderCache/transferable/{:08x}.bin", CafeSystem::GetRPXHashBase()); // before 1.16.0
 
+	LatteShaderCache_handleDeprecatedCacheFiles(pathGeneric, pathGenericPre1_25_0, pathGenericPre1_16_0);
 	// calculate extraVersion for transferable and precompiled shader cache
 	uint32 transferableExtraVersion = SHADER_CACHE_GENERIC_EXTRA_VERSION;
     s_shaderCacheGeneric = FileCache::Open(pathGeneric, false, transferableExtraVersion); // legacy extra version (1.25.0 - 1.25.1b)
@@ -486,7 +446,7 @@ void LatteShaderCache_Load()
 	};
 
 	LatteShaderCache_ShowProgress(LoadShadersUpdate, false);
-
+	
 	LatteShaderCache_updateCompileQueue(0);
 	// write load time and RAM usage to log file (in dev build)
 #if BOOST_OS_WINDOWS
@@ -499,11 +459,9 @@ void LatteShaderCache_Load()
 	cemuLog_log(LogType::Force, "Shader cache loaded with {} shaders. Commited mem {}MB. Took {}ms", numLoadedShaders, (sint32)(memCommited/1024/1024), timeLoad);
 #endif
 	LatteShaderCache_finish();
-	// if Vulkan or Metal then also load pipeline cache
-#if defined(ENABLE_VULKAN) || defined(ENABLE_METAL)
-	if (g_renderer->GetType() == RendererAPI::Vulkan || g_renderer->GetType() == RendererAPI::Metal)
-        LatteShaderCache_LoadPipelineCache(cacheTitleId);
-#endif
+	// if Vulkan then also load pipeline cache
+	if (g_renderer->GetType() == RendererAPI::Vulkan)
+        LatteShaderCache_LoadVulkanPipelineCache(cacheTitleId);
 
 
 	g_renderer->BeginFrame(true);
@@ -536,7 +494,7 @@ void LatteShaderCache_ShowProgress(const std::function <bool(void)>& loadUpdateF
 {
 	const auto kPopupFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize;
 	const auto textColor = 0xFF888888;
-
+	
 	auto lastFrameUpdate = tick_cached();
 
 	while (true)
@@ -553,7 +511,7 @@ void LatteShaderCache_ShowProgress(const std::function <bool(void)>& loadUpdateF
 			continue;
 
 		int w, h;
-		WindowSystem::GetWindowPhysSize(w, h);
+		gui_getWindowPhysSize(w, h);
 		const Vector2f window_size{ (float)w,(float)h };
 
 		ImGui_GetFont(window_size.y / 32.0f); // = 24 by default
@@ -589,7 +547,7 @@ void LatteShaderCache_ShowProgress(const std::function <bool(void)>& loadUpdateF
 				std::string text;
 				if (isPipelines)
 				{
-					text = "Loading cached pipelines...";
+					text = "Loading cached Vulkan pipelines...";
 				}
 				else
 				{
@@ -663,56 +621,19 @@ void LatteShaderCache_ShowProgress(const std::function <bool(void)>& loadUpdateF
 	}
 }
 
-void LatteShaderCache_LoadPipelineCache(uint64 cacheTitleId)
+void LatteShaderCache_LoadVulkanPipelineCache(uint64 cacheTitleId)
 {
-	switch(g_renderer->GetType())
-	{
-	#ifdef ENABLE_VULKAN
-	case RendererAPI::Vulkan:
-	    g_shaderCacheLoaderState.pipelineFileCount = VulkanPipelineStableCache::GetInstance().BeginLoading(cacheTitleId);
-	    break;
-	#endif
-#ifdef ENABLE_METAL
-	case RendererAPI::Metal:
-		g_shaderCacheLoaderState.pipelineFileCount = MetalPipelineCache::GetInstance().BeginLoading(cacheTitleId);
-		break;
-#endif
-	}
-
+	auto& pipelineCache = VulkanPipelineStableCache::GetInstance();
+	g_shaderCacheLoaderState.pipelineFileCount = pipelineCache.BeginLoading(cacheTitleId);
 	g_shaderCacheLoaderState.loadedPipelines = 0;
 	LatteShaderCache_ShowProgress(LatteShaderCache_updatePipelineLoadingProgress, true);
-
-	switch(g_renderer->GetType())
-	{
-#ifdef ENABLE_VULKAN
-	case RendererAPI::Vulkan:
-	    VulkanPipelineStableCache::GetInstance().EndLoading();
-	    break;
-#endif
-#ifdef ENABLE_METAL
-	case RendererAPI::Metal:
-		MetalPipelineCache::GetInstance().EndLoading();
-		break;
-#endif
-	}
+	pipelineCache.EndLoading();
 }
 
 bool LatteShaderCache_updatePipelineLoadingProgress()
 {
 	uint32 pipelinesMissingShaders = 0;
-	switch(g_renderer->GetType())
-	{
-#ifdef ENABLE_VULKAN
-	case RendererAPI::Vulkan:
-	    return VulkanPipelineStableCache::GetInstance().UpdateLoading(g_shaderCacheLoaderState.loadedPipelines, pipelinesMissingShaders);
-#endif
-#ifdef ENABLE_METAL
-	case RendererAPI::Metal:
-		return MetalPipelineCache::GetInstance().UpdateLoading(g_shaderCacheLoaderState.loadedPipelines, pipelinesMissingShaders);
-#endif
-	}
-
-	return false;
+	return VulkanPipelineStableCache::GetInstance().UpdateLoading(g_shaderCacheLoaderState.loadedPipelines, pipelinesMissingShaders);
 }
 
 uint64 LatteShaderCache_getShaderNameInTransferableCache(uint64 baseHash, uint32 shaderType)
@@ -970,37 +891,39 @@ void LatteShaderCache_Close()
         delete s_shaderCacheGeneric;
         s_shaderCacheGeneric = nullptr;
     }
-	switch(g_renderer->GetType())
-	{
-#ifdef ENABLE_VULKAN
-	case RendererAPI::Vulkan:
-		RendererShaderVk::ShaderCacheLoading_Close();
-		break;
-#endif
-#ifdef ENABLE_OPENGL
-	case RendererAPI::OpenGL:
-		RendererShaderGL::ShaderCacheLoading_Close();
-		break;
-#endif
-#ifdef ENABLE_METAL
-	case RendererAPI::Metal:
-		RendererShaderMtl::ShaderCacheLoading_Close();
-		break;
-#endif
-	}
+    if (g_renderer->GetType() == RendererAPI::Vulkan)
+        RendererShaderVk::ShaderCacheLoading_Close();
+    else if (g_renderer->GetType() == RendererAPI::OpenGL)
+        RendererShaderGL::ShaderCacheLoading_Close();
 
-    // if Vulkan or Metal then also close pipeline cache
-	switch(g_renderer->GetType())
+    // if Vulkan then also close pipeline cache
+    if (g_renderer->GetType() == RendererAPI::Vulkan)
+        VulkanPipelineStableCache::GetInstance().Close();
+}
+
+#include <wx/msgdlg.h>
+
+void LatteShaderCache_handleDeprecatedCacheFiles(fs::path pathGeneric, fs::path pathGenericPre1_25_0, fs::path pathGenericPre1_16_0)
+{
+	std::error_code ec;
+
+	bool hasOldCacheFiles = fs::exists(pathGenericPre1_25_0, ec) || fs::exists(pathGenericPre1_16_0, ec);
+	bool hasNewCacheFiles = fs::exists(pathGeneric, ec);
+
+	if (hasOldCacheFiles && !hasNewCacheFiles)
 	{
-#ifdef ENABLE_VULKAN
-	case RendererAPI::Vulkan:
-	    VulkanPipelineStableCache::GetInstance().Close();
-		break;
-#endif
-#ifdef ENABLE_METAL
-	case RendererAPI::Metal:
-	    MetalPipelineCache::GetInstance().Close();
-		break;
-#endif
+		// ask user if they want to delete or keep the old cache file
+		auto infoMsg = _("Cemu detected that the shader cache for this game is outdated.\nOnly shader caches generated with Cemu 1.25.0 or above are supported.\n\nWe recommend deleting the outdated cache file as it will no longer be used by Cemu.");
+			
+		wxMessageDialog dialog(nullptr, infoMsg, _("Outdated shader cache"),
+			wxYES_NO | wxCENTRE | wxICON_EXCLAMATION);
+
+		dialog.SetYesNoLabels(_("Delete outdated cache file [recommended]"), _("Keep outdated cache file"));
+		const auto result = dialog.ShowModal();
+		if (result == wxID_YES)
+		{
+			fs::remove(pathGenericPre1_16_0, ec);
+			fs::remove(pathGenericPre1_25_0, ec);
+		}
 	}
 }

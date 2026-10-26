@@ -2,33 +2,43 @@
 #include "Common/FileStream.h"
 #include <sys/mman.h>
 #include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
-template <typename T>
-std::span<T> ELFSymbolTable::SectionAsArray(const Elf64_Shdr* section)
+uint16 ELFSymbolTable::FindSection(int type, const std::string_view& name)
 {
-	if (section == nullptr)
-		return {};
-	if (section->sh_size < sizeof(T))
-		return {};
-	if (section->sh_entsize != 0 && section->sh_entsize != sizeof(T))
-		return {};
+	if (!shTable || !shStrTable)
+		return 0;
 
-	return {(T*)(mappedExecutable + section->sh_offset), section->sh_size / sizeof(T)};
+	for (uint16 i = 0; i < header->e_shnum; ++i)
+	{
+		auto& entry = shTable[i];
+		if(entry.sh_type == type && std::string_view{&shStrTable[entry.sh_name]} == name)
+		{
+			return i;
+		}
+	}
+	return 0;
 }
 
+void* ELFSymbolTable::SectionPointer(uint16 index)
+{
+	return SectionPointer(shTable[index]);
+}
+
+void* ELFSymbolTable::SectionPointer(const Elf64_Shdr& section)
+{
+	return (void*)(mappedExecutable + section.sh_offset);
+}
 
 ELFSymbolTable::ELFSymbolTable()
 {
 	// create file handle
 	int fd = open("/proc/self/exe", O_RDONLY);
-	if (fd < 0)
+	if (!fd)
 		return;
 
 	// retrieve file size.
 	struct stat filestats;
-	if (fstat(fd, &filestats) != 0)
+	if (fstat(fd, &filestats))
 	{
 		close(fd);
 		return;
@@ -36,9 +46,9 @@ ELFSymbolTable::ELFSymbolTable()
 	mappedExecutableSize = filestats.st_size;
 
 	// attempt to map the file
-	mappedExecutable = static_cast<uint8*>(mmap(nullptr, mappedExecutableSize, PROT_READ, MAP_PRIVATE, fd, 0));
+	mappedExecutable = (uint8*)(mmap(nullptr, mappedExecutableSize, PROT_READ, MAP_PRIVATE, fd, 0));
 	close(fd);
-	if (mappedExecutable == MAP_FAILED)
+	if (!mappedExecutable)
 		return;
 
 	// verify signature
@@ -52,11 +62,19 @@ ELFSymbolTable::ELFSymbolTable()
 		}
 	}
 
-	shTable = {(Elf64_Shdr*)(mappedExecutable + header->e_shoff), header->e_shnum};
+	shTable = (Elf64_Shdr*)(mappedExecutable + header->e_shoff);
 
-	shStrTable = SectionAsArray<char>(&shTable[header->e_shstrndx]);
-	strTable = SectionAsArray<char>(FindSection(SHT_STRTAB, ".strtab"));
-	symTable = SectionAsArray<Elf64_Sym>(FindSection(SHT_SYMTAB, ".symtab"));
+	Elf64_Shdr& shStrn = shTable[header->e_shstrndx];
+	shStrTable = (char*)(mappedExecutable + shStrn.sh_offset);
+
+	strTable = (char*)SectionPointer(FindSection(SHT_STRTAB, ".strtab"));
+
+	Elf64_Shdr& symTabShdr = shTable[FindSection(SHT_SYMTAB, ".symtab")];
+	if (symTabShdr.sh_entsize == 0)
+		return;
+
+	symTableLen = symTabShdr.sh_size / symTabShdr.sh_entsize;
+	symTable = (Elf64_Sym*)(SectionPointer(symTabShdr));
 }
 
 ELFSymbolTable::~ELFSymbolTable()
@@ -65,30 +83,15 @@ ELFSymbolTable::~ELFSymbolTable()
 		munmap(mappedExecutable, mappedExecutableSize);
 }
 
-Elf64_Shdr* ELFSymbolTable::FindSection(Elf64_Word type, const std::string_view& name)
-{
-	if (shTable.empty() || shStrTable.empty())
-		return nullptr;
-
-	for (auto& entry : shTable)
-	{
-		if(entry.sh_type == type && std::string_view{&shStrTable[entry.sh_name]} == name)
-		{
-			return &entry;
-		}
-	}
-	return nullptr;
-}
-
 std::string_view ELFSymbolTable::OffsetToSymbol(uint64 ptr, uint64& fromStart) const
 {
-	if(symTable.empty() || strTable.empty())
+	if(!symTable || !strTable)
 	{
 		fromStart = -1;
 		return {};
 	}
 
-	for (auto entry = symTable.begin()+1; entry != symTable.end(); ++entry)
+	for (auto entry = symTable+1; entry < symTable+symTableLen; ++entry)
 	{
 		if (ELF64_ST_TYPE(entry->st_info) != STT_FUNC)
 			continue;

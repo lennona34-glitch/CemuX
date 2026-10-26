@@ -6,10 +6,9 @@ void LatteSHRC_Init();
 void LatteSHRC_UnloadAll();
 
 void LatteSHRC_ResetCachedShaderHash();
-LatteFetchShader* LatteSHRC_GetOrCreateFetchShader();
+void LatteShaderSHRC_UpdateFetchShader();
 
 void LatteSHRC_UpdateActiveShaders();
-void LatteSHRC_CleanupShaderStateCache();
 
 struct LatteFetchShader* LatteSHRC_GetActiveFetchShader();
 LatteDecompilerShader* LatteSHRC_GetActiveVertexShader();
@@ -85,7 +84,6 @@ struct LatteShaderPSInputTable
 	}
 };
 
-void LatteShader_CreatePSInputTable(LatteShaderPSInputTable* psInputTable, uint32* contextRegisters);
 void LatteShader_UpdatePSInputs(uint32* contextRegisters);
 LatteShaderPSInputTable* LatteSHRC_GetPSInputTable();
 

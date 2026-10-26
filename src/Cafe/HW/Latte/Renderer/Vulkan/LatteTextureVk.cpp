@@ -49,7 +49,6 @@ LatteTextureVk::LatteTextureVk(class VulkanRenderer* vkRenderer, Latte::E_DIM di
 	cemu_assert_debug(hasStencil == ((texFormatInfo.vkImageAspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0));
 	imageInfo.format = texFormatInfo.vkImageFormat;
 	vkObjTex->m_imageAspect = texFormatInfo.vkImageAspect;
-	m_isAlternateFormat = texFormatInfo.isAlternateFormat;
 	
 	if (isDepth == false && texFormatInfo.isCompressed)
 	{
@@ -66,12 +65,6 @@ LatteTextureVk::LatteTextureVk(class VulkanRenderer* vkRenderer, Latte::E_DIM di
 	{
 		if(Latte::IsCompressedFormat(format) == false && texFormatInfo.vkImageFormat != VK_FORMAT_R4G4_UNORM_PACK8) // Vulkan's R4G4 cant be used as a color attachment
 			imageInfo.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-	}
-
-	if (m_vkr->UseAttachmentFeedbackLoop() && (imageInfo.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0)
-	{
-		imageInfo.usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
-		m_defaultLayout = VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
 	}
 
 	if (dim == Latte::E_DIM::DIM_2D)
@@ -94,14 +87,14 @@ LatteTextureVk::LatteTextureVk(class VulkanRenderer* vkRenderer, Latte::E_DIM di
 	if (vkCreateImage(m_vkr->GetLogicalDevice(), &imageInfo, nullptr, &vkObjTex->m_image) != VK_SUCCESS)
 		m_vkr->UnrecoverableError("Failed to create texture image");
 	
-	if (m_vkr->IsDebugMarkersEnabled())
+	if (m_vkr->IsDebugUtilsEnabled() && vkSetDebugUtilsObjectNameEXT)
 	{
 		VkDebugUtilsObjectNameInfoEXT objName{};
 		objName.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
 		objName.objectType = VK_OBJECT_TYPE_IMAGE;
 		objName.pNext = nullptr;
 		objName.objectHandle = (uint64_t)vkObjTex->m_image;
-		auto objNameStr = fmt::format("tex_{:08x}_fmt{:04x}_tm{:x}", physAddress, (uint32)format, (uint32)tileMode);
+		auto objNameStr = fmt::format("tex_{:08x}_fmt{:04x}", physAddress, (uint32)format);
 		objName.pObjectName = objNameStr.c_str();
 		vkSetDebugUtilsObjectNameEXT(m_vkr->GetLogicalDevice(), &objName);
 	}

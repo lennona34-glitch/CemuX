@@ -7,10 +7,12 @@ fs::path findPathCI(const fs::path& path)
 
 	fs::path fName = path.filename();
 	fs::path parentPath = path.parent_path();
-	if (parentPath.empty())
-		parentPath = ".";
-	else if (!fs::exists(parentPath))
-		parentPath = findPathCI(parentPath);
+	if (!fs::exists(parentPath))
+	{
+		auto CIParent = findPathCI(parentPath);
+		if (fs::exists(CIParent))
+			return findPathCI(CIParent / fName);
+	}
 
 	std::error_code listErr;
 	for (auto&& dirEntry : fs::directory_iterator(parentPath, listErr))
@@ -112,11 +114,6 @@ void FileStream::extract(std::vector<uint8>& data)
 	SetPosition(0);
 	data.resize(fileSize);
 	readData(data.data(), fileSize);
-}
-
-void FileStream::Flush()
-{
-    m_fileStream.flush();
 }
 
 uint32 FileStream::readData(void* data, uint32 length)
@@ -241,59 +238,4 @@ void FileStream::SyncReadWriteSeek(bool nextOpIsWrite)
 		m_fileStream.seekg(m_fileStream.tellp(), std::ios::beg);
 
 	m_prevOperationWasWrite = nextOpIsWrite;
-}
-
-bool FileStream::WriteFileAtomic(const fs::path& path, std::span<uint8> fileData, bool allowTargetFileRename)
-{
-	std::error_code ec;
-	fs::path altPath = path;
-	altPath.replace_extension( _utf8ToPath(_pathToUtf8(altPath.extension()).append("_tmp")));
-	FileStream* fsAlt = FileStream::createFile2(altPath);
-	if (!fsAlt)
-		return false;
-	if (fsAlt->writeData(fileData.data(), fileData.size()) != fileData.size())
-	{
-		delete fsAlt;
-		fs::remove(altPath, ec);
-		return false;
-	}
-	fsAlt->Flush();
-	delete fsAlt;
-	fs::rename(altPath, path, ec);
-	if (ec)
-	{
-		// the target file might be in use, try to rename it if allowed
-		// this isn't strictly atomic
-		if (allowTargetFileRename)
-		{
-			fs::path backupPath = path;
-			backupPath.replace_extension( _utf8ToPath(_pathToUtf8(backupPath.extension()).append(".backup")));
-			std::error_code ec;
-			fs::rename(path, backupPath, ec);
-			if (ec)
-			{
-				cemuLog_log(LogType::Force, "Failed to atomically replace file {}, error {}", _pathToUtf8(path), ec.message());
-				fs::remove(altPath, ec);
-				return false;
-			}
-			// target file renamed, try to replace it again
-			fs::rename(altPath, path, ec);
-			if (ec)
-			{
-				cemuLog_log(LogType::Force, "Failed to atomically replace file {}, error {}", _pathToUtf8(path), ec.message());
-				fs::rename(backupPath, path, ec); // try to undo rename
-				if (ec)
-					cemuLog_log(LogType::Force, "Failed to restore original file {}, error {}", _pathToUtf8(path), ec.message());
-				fs::remove(altPath, ec);
-				return false;
-			}
-		}
-		else if (ec)
-		{
-			cemuLog_log(LogType::Force, "Failed to atomically replace file {}, error {}", _pathToUtf8(path), ec.message());
-			fs::remove(altPath, ec);
-			return false;
-		}
-	}
-	return true;
 }

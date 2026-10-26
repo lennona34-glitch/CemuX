@@ -1,3 +1,4 @@
+
 #ifdef __GNUC__
 #define ATTRIBUTE_AVX2 __attribute__((target("avx2")))
 #define ATTRIBUTE_SSE41 __attribute__((target("sse4.1")))
@@ -7,8 +8,6 @@
 #define ATTRIBUTE_SSE41
 #define ATTRIBUTE_AESNI
 #endif
-
-#include <string>
 
 class CPUFeaturesImpl
 {
@@ -27,7 +26,6 @@ public:
 		bool lzcnt{ false };
 		bool movbe{ false };
 		bool bmi2{ false };
-		bool fastPext{ false }; // use PEXT instead of shifts and masks
 		bool aesni{ false };
 		bool invariant_tsc{ false };
 	}x86;

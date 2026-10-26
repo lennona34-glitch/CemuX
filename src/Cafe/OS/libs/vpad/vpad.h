@@ -1,7 +1,12 @@
 #pragma once
 
 #include "Cafe/OS/libs/padscore/padscore.h"
-#include "Cafe/OS/RPL/COSModule.h"
+
+namespace vpad
+{
+	void load();
+	void start();
+}
 
 #define VPAD_MAX_CONTROLLERS (2)
 
@@ -79,8 +84,3 @@ typedef struct VPADStatus
 }VPADStatus_t;
 
 static_assert(sizeof(VPADStatus) == 0xAC);
-
-namespace vpad
-{
-	COSModule* GetModule();
-}

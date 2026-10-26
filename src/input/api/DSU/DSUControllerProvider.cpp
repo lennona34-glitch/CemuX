@@ -42,24 +42,8 @@ DSUControllerProvider::~DSUControllerProvider()
 	if (m_running)
 	{
 		m_running = false;
-		// wake up the reader thread by sending a packet to self
-		if (m_socketWakeupEndpoint.port() != 0)
-		{
-			boost::asio::io_context io_context;
-			boost::asio::ip::udp::socket socket(io_context);
-			boost::system::error_code ec;
-			socket.open(m_socketWakeupEndpoint.protocol(), ec);
-			if (!ec)
-			{
-				std::array<char, 1> data{};
-				socket.send_to(boost::asio::buffer(data), m_socketWakeupEndpoint, 0, ec);
-			}
-			else
-				cemuLog_log(LogType::Force, "DSUControllerProvider wakeup failed");
-		}
-		m_reader_thread.join();
-		m_writerJobs.push(nullptr); // wake up writer thread by pushing an empty message
 		m_writer_thread.join();
+		m_reader_thread.join();
 	}
 }
 
@@ -100,8 +84,14 @@ bool DSUControllerProvider::connect()
 			m_socket.close();
 
 		m_socket.open(ip::udp::v4());
-		m_socket.bind(ip::udp::endpoint(ip::udp::v4(), 0));
-		m_socketWakeupEndpoint = ip::udp::endpoint(boost::asio::ip::address_v4::loopback(), m_socket.local_endpoint().port());
+
+        // set timeout for our threads to give a chance to exit
+#if BOOST_OS_WINDOWS
+        m_socket.set_option(boost::asio::detail::socket_option::integer<SOL_SOCKET, SO_RCVTIMEO>{200});
+#elif BOOST_OS_LINUX || BOOST_OS_MACOS
+        timeval timeout{.tv_usec = 200 * 1000};
+        setsockopt(m_socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeval));
+#endif
 		// reset data
 		m_state = {};
 		m_prev_state = {};
@@ -199,13 +189,19 @@ uint32_t DSUControllerProvider::get_packet_index(uint8_t index) const
 void DSUControllerProvider::request_version()
 {
 	auto msg = std::make_unique<VersionRequest>(m_uid);
-	m_writerJobs.push(std::move(msg));
+
+	std::scoped_lock lock(m_writer_mutex);
+	m_writer_jobs.push(std::move(msg));
+	m_writer_cond.notify_one();
 }
 
 void DSUControllerProvider::request_pad_info()
 {
 	auto msg = std::make_unique<ListPorts>(m_uid, 4, std::array<uint8_t, 4>{0, 1, 2, 3});
-	m_writerJobs.push(std::move(msg));
+
+	std::scoped_lock lock(m_writer_mutex);
+	m_writer_jobs.push(std::move(msg));
+	m_writer_cond.notify_one();
 }
 
 void DSUControllerProvider::request_pad_info(uint8_t index)
@@ -214,13 +210,19 @@ void DSUControllerProvider::request_pad_info(uint8_t index)
 		return;
 
 	auto msg = std::make_unique<ListPorts>(m_uid, 1, std::array<uint8_t, 4>{index});
-	m_writerJobs.push(std::move(msg));
+
+	std::scoped_lock lock(m_writer_mutex);
+	m_writer_jobs.push(std::move(msg));
+	m_writer_cond.notify_one();
 }
 
 void DSUControllerProvider::request_pad_data()
 {
 	auto msg = std::make_unique<DataRequest>(m_uid);
-	m_writerJobs.push(std::move(msg));
+
+	std::scoped_lock lock(m_writer_mutex);
+	m_writer_jobs.push(std::move(msg));
+	m_writer_cond.notify_one();
 }
 
 void DSUControllerProvider::request_pad_data(uint8_t index)
@@ -229,7 +231,10 @@ void DSUControllerProvider::request_pad_data(uint8_t index)
 		return;
 
 	auto msg = std::make_unique<DataRequest>(m_uid, index);
-	m_writerJobs.push(std::move(msg));
+
+	std::scoped_lock lock(m_writer_mutex);
+	m_writer_jobs.push(std::move(msg));
+	m_writer_cond.notify_one();
 }
 
 MotionSample DSUControllerProvider::get_motion_sample(uint8_t index) const
@@ -254,11 +259,8 @@ void DSUControllerProvider::reader_thread()
 		boost::asio::ip::udp::endpoint sender_endpoint;
 		boost::system::error_code ec{};
 		const size_t len = m_socket.receive_from(boost::asio::buffer(recv_buf), sender_endpoint, 0, ec);
-		if (!m_running.load(std::memory_order_relaxed))
-			break;
 		if (ec)
 		{
-
 #ifdef DEBUG_DSU_CLIENT
 				printf(" DSUControllerProvider::ReaderThread: exception %s\n", ec.what());
 #endif
@@ -334,7 +336,6 @@ void DSUControllerProvider::reader_thread()
 				}
 
 				index = info->GetIndex();
-				cemu_assert(index < kMaxClients);
 #ifdef DEBUG_DSU_CLIENT
 			printf(" DSUControllerProvider::ReaderThread: received PortInfo for index %d\n", index);
 #endif
@@ -358,7 +359,6 @@ void DSUControllerProvider::reader_thread()
 				}
 
 				index = rsp->GetIndex();
-				cemu_assert(index < kMaxClients);
 #ifdef DEBUG_DSU_CLIENT
 			printf(" DSUControllerProvider::ReaderThread: received DataResponse for index %d\n", index);
 #endif
@@ -384,10 +384,20 @@ void DSUControllerProvider::writer_thread()
 	SetThreadName("DSU-writer");
 	while (m_running.load(std::memory_order_relaxed))
 	{
-		std::unique_ptr<ClientMessage> msg = m_writerJobs.pop();
-		if (!m_running.load(std::memory_order_relaxed))
-			return;
-		cemu_assert_debug(msg.get());
+		std::unique_lock lock(m_writer_mutex);
+		while (m_writer_jobs.empty())
+		{
+			if (m_writer_cond.wait_for(lock, std::chrono::milliseconds(250)) == std::cv_status::timeout)
+			{
+				if (!m_running.load(std::memory_order_relaxed))
+					return;
+			}
+		}
+
+		const auto msg = std::move(m_writer_jobs.front());
+		m_writer_jobs.pop();
+		lock.unlock();
+
 #ifdef DEBUG_DSU_CLIENT
 		printf(" DSUControllerProvider::WriterThread: sending message: 0x%x (len: 0x%x)\n", (int)msg->GetMessageType(), msg->GetSize());
 #endif

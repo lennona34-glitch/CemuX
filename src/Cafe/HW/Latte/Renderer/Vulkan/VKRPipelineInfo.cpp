@@ -26,6 +26,7 @@ PipelineInfo::PipelineInfo(uint64 minimalStateHash, uint64 pipelineHash, LatteFe
 
 	// init VKRObjPipeline
 	m_vkrObjPipeline = new VKRObjectPipeline();
+	m_vkrObjPipeline->pipeline = VK_NULL_HANDLE;
 
 	// track dependency with shaders
 	if (vertexShaderVk)
@@ -43,8 +44,6 @@ PipelineInfo::PipelineInfo(uint64 minimalStateHash, uint64 pipelineHash, LatteFe
 			neverSkipAccurateBarrier = true;
 		if (pixelShader->baseHash == 0x4c0bd596e3aef4a6 && pixelShader->auxHash == 0x003c3c3fc9269249) // BotW foam layer for water on the bottom of waterfalls
 			neverSkipAccurateBarrier = true;
-		if (pixelShader->baseHash == 0x3a7e6b48dae31305 && pixelShader->auxHash == 0x003c3c3fc9269249) // BotW Gerudo Town water
-			neverSkipAccurateBarrier = true;
 	}
 }
 
@@ -58,13 +57,20 @@ PipelineInfo::~PipelineInfo()
 	}
 
 	// delete descriptor sets
-	for (auto& it : ds_cache)
+	while (!pixel_ds_cache.empty())
 	{
-		while (!it.empty())
-		{
-			VkDescriptorSetInfo* dsInfo = it.begin()->second;
-			delete dsInfo;
-		}
+		VkDescriptorSetInfo* dsInfo = pixel_ds_cache.begin()->second;
+		delete dsInfo;
+	}
+	while (!geometry_ds_cache.empty())
+	{
+		VkDescriptorSetInfo* dsInfo = geometry_ds_cache.begin()->second;
+		delete dsInfo;
+	}
+	while (!vertex_ds_cache.empty())
+	{
+		VkDescriptorSetInfo* dsInfo = vertex_ds_cache.begin()->second;
+		delete dsInfo;
 	}
 
 	// disassociate from shaders

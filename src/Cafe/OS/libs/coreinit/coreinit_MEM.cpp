@@ -6,33 +6,33 @@
 #include "Cafe/OS/RPL/rpl.h"
 #include "Cafe/OS/libs/coreinit/coreinit_MEM_FrmHeap.h"
 #include "coreinit_DynLoad.h"
-#include "util/ChunkedHeap/ChunkedHeap.h"
 
 // the system area is a block of memory that exists only in the emulator. It is used to simplify dynamic memory allocation for system data
-// it's deprecated -> Use SysHeap/CafeStaticVar for everything
+// this partially overlaps with the system heap from coreinit_SysHeap.cpp -> Use SysHeap for everything
+MPTR sysAreaAllocatorOffset = 0;
 
-static std::unique_ptr<VHeap> s_cosSysHeap;
-static std::mutex s_allocatorMtx;
-
-// deprecated
 MPTR coreinit_allocFromSysArea(uint32 size, uint32 alignment)
 {
-	std::unique_lock _(s_allocatorMtx);
 	cemu_assert_debug(mmuRange_CEMU_AREA.isMapped());
-	if (!s_cosSysHeap)
-		s_cosSysHeap = std::make_unique<VHeap>(mmuRange_CEMU_AREA.getPtr(), mmuRange_CEMU_AREA.getSize());
-	MEMPTR<void> r = s_cosSysHeap->alloc(size, alignment);
-	if (!r)
+	// deprecated, use OSAllocFromSystem instead (for everything but SysAllocator which probably should use its own allocator?)
+	static std::mutex s_allocator_mutex;
+	s_allocator_mutex.lock();
+	sysAreaAllocatorOffset = (sysAreaAllocatorOffset+alignment-1);
+	sysAreaAllocatorOffset -= (sysAreaAllocatorOffset%alignment);
+	uint32 newMemOffset =  mmuRange_CEMU_AREA.getBase() + sysAreaAllocatorOffset;
+	sysAreaAllocatorOffset += (size+3)&~3;
+	if( sysAreaAllocatorOffset >= mmuRange_CEMU_AREA.getSize() )
+	{
 		cemuLog_log(LogType::Force, "Ran out of system memory");
-	cemu_assert(r);
-	return r.GetMPTR();
+		cemu_assert(false); // out of bounds
+	}
+	s_allocator_mutex.unlock();
+	return newMemOffset;
 }
 
 void coreinit_freeToSysArea(MPTR mem)
 {
-	cemu_assert(mem != MPTR_NULL);
-	std::unique_lock _(s_allocatorMtx);
-	s_cosSysHeap->free(MEMPTR<void>(mem).GetPtr());
+	// todo
 }
 
 namespace coreinit
@@ -50,7 +50,7 @@ namespace coreinit
 	MEMList g_list3;
 
 	std::array<uint32, 3> gHeapFillValues{ 0xC3C3C3C3, 0xF3F3F3F3, 0xD3D3D3D3 };
-	CafeStaticVar<OSSpinLock> gHeapGlobalLock{coreinit::g_coreinitStaticData};
+	SysAllocator<OSSpinLock> gHeapGlobalLock;
 	MEMHeapBase* gDefaultHeap;
 
 	bool MEMHeapTable_Add(MEMHeapBase* heap)
@@ -562,7 +562,7 @@ namespace coreinit
 		hCPU->instructionPointer = gCoreinitData->MEMFreeToDefaultHeap.GetMPTR();
 	}
 
-	CafeStaticVar<MEMAllocatorFunc> gDefaultHeapAllocator{coreinit::g_coreinitStaticData};
+	SysAllocator<MEMAllocatorFunc> gDefaultHeapAllocator;
 
 	void coreinitExport_MEMInitAllocatorForDefaultHeap(PPCInterpreter_t* hCPU)
 	{
@@ -621,7 +621,6 @@ namespace coreinit
             it = nullptr;
 
         g_heapTableCount = 0;
-        gHeapFillValues = { 0xC3C3C3C3, 0xF3F3F3F3, 0xD3D3D3D3 };
         g_slockInitialized = false;
         g_listsInitialized = false;
         gDefaultHeap = nullptr;

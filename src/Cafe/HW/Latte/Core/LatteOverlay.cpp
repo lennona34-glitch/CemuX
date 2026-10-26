@@ -1,10 +1,11 @@
 #include "Cafe/HW/Latte/Core/LatteOverlay.h"
 #include "Cafe/HW/Latte/Core/LattePerformanceMonitor.h"
-#include "Cafe/HW/Latte/Renderer/Renderer.h"
-#include "Cafe/Account/Account.h"
+#include "gui/guiWrapper.h"
+
 #include "config/CemuConfig.h"
+
+#include "Cafe/HW/Latte/Renderer/Renderer.h"
 #include "config/ActiveSettings.h"
-#include "WindowSystem.h"
 
 #include <imgui.h>
 #include "resource/IconsFontAwesome5.h"
@@ -35,8 +36,6 @@ struct OverlayStats
 
 extern std::atomic_int g_compiled_shaders_total;
 extern std::atomic_int g_compiled_shaders_async;
-extern std::atomic_int g_shaderStateCacheSetCount;
-extern std::atomic_int g_shaderStateCacheSetAuxCount;
 
 std::atomic_int g_compiling_pipelines;
 std::atomic_int g_compiling_pipelines_async;
@@ -112,7 +111,6 @@ void LatteOverlay_renderOverlay(ImVec2& position, ImVec2& pivot, sint32 directio
 				// general debug info
 				ImGui::Text("--- Debug info ---");
 				ImGui::Text("IndexUploadPerFrame: %dKB", (performanceMonitor.stats.indexDataUploadPerFrame+1023)/1024);
-				ImGui::Text("SHCSets: %d / %d", g_shaderStateCacheSetCount.load(), g_shaderStateCacheSetAuxCount.load());
 				// backend specific info
 				g_renderer->AppendOverlayDebugInfo();
 			}
@@ -521,17 +519,17 @@ void LatteOverlay_render(bool pad_view)
 		return;
 
 	sint32 w = 0, h = 0;
-	if (pad_view && WindowSystem::IsPadWindowOpen())
-		WindowSystem::GetPadWindowPhysSize(w, h);
+	if (pad_view && gui_isPadWindowOpen())
+		gui_getPadWindowPhysSize(w, h);
 	else
-		WindowSystem::GetWindowPhysSize(w, h);
+		gui_getWindowPhysSize(w, h);
 
 	if (w == 0 || h == 0)
 		return;
 
 	const Vector2f window_size{ (float)w,(float)h };
 
-	float fontDPIScale = !pad_view ? WindowSystem::GetWindowDPIScale() : WindowSystem::GetPadDPIScale();
+	float fontDPIScale = !pad_view ? gui_getWindowDPIScale() : gui_getPadDPIScale();
 
 	float overlayFontSize = 14.0f * (float)config.overlay.text_scale / 100.0f * fontDPIScale;
 

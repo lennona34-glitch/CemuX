@@ -45,12 +45,13 @@ public:
 	// if no match is found a default-constructed object is returned
 	T lookup(uint32 offset)
 	{
-		uint32 indexX = (offset >> (TBitsZ + TBitsY)) & ((1u << TBitsX) - 1);
-		auto& a = m_tableXArr[indexX];
-		uint32 indexY = (offset >> TBitsZ) & ((1u << TBitsY) - 1);
-		auto& b = a->arr[indexY];
 		uint32 indexZ = offset & ((1u << TBitsZ) - 1);
-		return b->arr[indexZ];
+		offset >>= TBitsZ;
+		uint32 indexY = offset & ((1u << TBitsY) - 1);
+		offset >>= TBitsY;
+		uint32 indexX = offset & ((1u << TBitsX) - 1);
+		//offset >>= TBitsX;
+		return m_tableXArr[indexX]->arr[indexY]->arr[indexZ];
 	}
 
 	void store(uint32 offset, T& t)
@@ -76,7 +77,6 @@ private:
 		TableY* tableY = new TableY();
 		for (auto& itr : tableY->arr)
 			itr = m_placeholderTableZ;
-		tYCount++;
 		return tableY;
 	}
 
@@ -84,11 +84,8 @@ private:
 	TableZ* GenerateNewTableZ()
 	{
 		TableZ* tableZ = new TableZ();
-		tZCount++;
 		return tableZ;
 	}
 
 	TableY* m_tableXArr[1 << TBitsX]; // x lookup
-	int tYCount = 0;
-	int tZCount = 0;
 };

@@ -1,12 +1,10 @@
 #pragma once
-#include "Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h"
-#include "VKRBase.h"
 
 class PipelineCompiler : public VKRMoveableRefCounter
 {
 private:
 	// helper functions
-	VkFormat GetVertexFormat(Latte::E_HWFMT format);
+	VkFormat GetVertexFormat(uint8 format);
 	bool ConsumesBlendConstants(VkBlendFactor blendFactor);
 
 	void CreateDescriptorSetLayout(VulkanRenderer* vkRenderer, LatteDecompilerShader* shader, VkDescriptorSetLayout& layout, PipelineInfo* vkrPipelineInfo);
@@ -40,19 +38,11 @@ public:
 	RendererShaderVk* m_vkPixelShader{};
 	RendererShaderVk* m_vkGeometryShader{};
 
-	bool InitFromCurrentGPUState(PipelineInfo* pipelineInfo, const LatteContextRegister& latteRegister, VKRObjectRenderPass* renderPassObj, bool requireRobustBufferAccess);
+	bool InitFromCurrentGPUState(PipelineInfo* pipelineInfo, const LatteContextRegister& latteRegister, VKRObjectRenderPass* renderPassObj);
 	void TrackAsCached(uint64 baseHash, uint64 pipelineStateHash); // stores pipeline to permanent cache if not yet cached. Must be called synchronously from render thread due to dependency on GPU state
 
-	static bool CalcRobustBufferAccessRequirement(LatteDecompilerShader* vertexShader, LatteDecompilerShader* pixelShader, LatteDecompilerShader* geometryShader);
-
-	// API for thread pool
-	static void CompileThreadPool_Start();
-	static void CompileThreadPool_Stop();
-	static void CompileThreadPool_QueueCompilation(PipelineCompiler* v);
-
-	VkPipelineLayout m_pipelineLayout;
+	VkPipelineLayout m_pipeline_layout;
 	VKRObjectRenderPass* m_renderPassObj{};
-	bool m_requestRobustBufferAccess{false};
 
 	/* shader stages */
 	std::vector<VkPipelineShaderStageCreateInfo> shaderStages;

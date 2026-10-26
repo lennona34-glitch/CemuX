@@ -1,6 +1,7 @@
 #include "Cafe/HW/Latte/ISA/RegDefines.h"
 #include "Cafe/OS/common/OSCommon.h"
 #include "GX2.h"
+#include "config/CemuConfig.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Time.h"
 #include "config/ActiveSettings.h"
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
@@ -11,8 +12,6 @@
 #include "GX2_Misc.h"
 #include "GX2_Memory.h"
 #include "GX2_Texture.h"
-
-#include "Cafe/HW/Latte/ISA/LatteReg.h"
 
 void gx2Export_GX2SetSwapInterval(PPCInterpreter_t* hCPU)
 {
@@ -70,7 +69,6 @@ void gx2Export_GX2SampleBottomGPUCycle(PPCInterpreter_t* hCPU)
 	// Whats a good solution here? Should we implement it correctly and instead rely on graphic pack patches to patch out the dynamic scaling?
 	// some known affected games: Wind Waker HD, Super Mario 3D World
 
-	GX2::GX2ReserveCmdSpace(2);
 	gx2WriteGather_submitU32AsBE(pm4HeaderType3(IT_HLE_SAMPLE_TIMER, 1));
 	gx2WriteGather_submitU32AsBE(hCPU->gpr[3]); 
 	osLib_returnFromFunction(hCPU, 0);
@@ -78,73 +76,24 @@ void gx2Export_GX2SampleBottomGPUCycle(PPCInterpreter_t* hCPU)
 
 namespace GX2
 {
-	CafeStaticVar<uint8, 640 * 480 * 4, 0x1000> _lastFrame{s_gx2StaticData};
+	SysAllocator<uint8, 640 * 480 * 4, 0x1000> _lastFrame;
 	uint32 sGX2MainCoreIndex = 0;
 
 	void _test_AddrLib();
 
-	using GX2InitArg = uint32;
-	enum class GX2InitArgId : GX2InitArg
-	{
-		EndOfArgs = 0,
-		CommandPoolBase = 1,
-		CommandPoolSize = 2,
-		UknArg7 = 7,
-		UknArg8 = 8,
-		UknArg9 = 9,
-		UknArg11 = 11,
-	};
-
-	void GX2Init(betype<GX2InitArg>* initArgStream)
+	void GX2Init(void* initSettings)
 	{
 		if (LatteGPUState.gx2InitCalled)
 		{
 			cemuLog_logDebug(LogType::Force, "GX2Init() called while already initialized");
 			return;
 		}
-		// parse init params from the stream
-		MEMPTR<void> commandPoolBase = nullptr;
-		uint32 commandPoolSize = 0;
-		if (initArgStream)
-		{
-			while (true)
-			{
-				GX2InitArgId paramId = static_cast<GX2InitArgId>((GX2InitArg)*initArgStream);
-				initArgStream++;
-				if (paramId == GX2InitArgId::EndOfArgs)
-				{
-					break;
-				}
-				else if (paramId == GX2InitArgId::CommandPoolBase)
-				{
-					commandPoolBase = MEMPTR<void>(*initArgStream);
-					initArgStream++;
-				}
-				else if (paramId == GX2InitArgId::CommandPoolSize)
-				{
-					commandPoolSize = *initArgStream;
-					initArgStream++;
-				}
-				else if (paramId == GX2InitArgId::UknArg7 ||
-					paramId == GX2InitArgId::UknArg8 ||
-					paramId == GX2InitArgId::UknArg9 ||
-					paramId == GX2InitArgId::UknArg11)
-				{
-					initArgStream++;
-				}
-				else
-				{
-					cemuLog_log(LogType::Force, "GX2Init: Unsupported init arg {}", (uint32)paramId);
-				}
-			}
-		}
-		// init main core
 		uint32 coreIndex = coreinit::OSGetCoreId();
 		cemuLog_log(LogType::GX2, "GX2Init() on core {} by thread 0x{:08x}", coreIndex, MEMPTR<OSThread_t>(coreinit::OSGetCurrentThread()).GetMPTR());
 		sGX2MainCoreIndex = coreIndex;
 		// init submodules
 		GX2::GX2Init_event();
-		GX2::GX2Init_commandBufferPool(commandPoolBase, commandPoolSize);
+		GX2::GX2Init_writeGather();
 		// init shared area
 		if (LatteGPUState.sharedAreaAddr == MPTR_NULL)
 		{
@@ -161,21 +110,6 @@ namespace GX2
 		LatteGPUState.gx2InitCalled++;
 		// run tests
 		_test_AddrLib();
-	}
-
-	void GX2Shutdown()
-	{
-		if (!LatteGPUState.gx2InitCalled)
-		{
-			cemuLog_logDebug(LogType::Force, "GX2Shutdown() called while not initialized");
-			return;
-		}
-		LatteGPUState.gx2InitCalled--;
-		if (LatteGPUState.gx2InitCalled != 0)
-			return;
-		GX2DrawDone();
-		GX2Shutdown_commandBufferPool();
-		cemuLog_log(LogType::Force, "GX2 shutdown");
 	}
 
 	void _GX2DriverReset()
@@ -208,12 +142,8 @@ namespace GX2
 
 	void GX2SetTVGamma(float gamma)
 	{
-		LatteGPUState.tvGamma = (1.0f - gamma);
-	}
-
-	void GX2SetDRCGamma(float gamma)
-	{
-		LatteGPUState.drcGamma = (1.0f - gamma);
+		if (abs(gamma - 1.0f) > 0.01f)
+			cemuLog_logDebug(LogType::Force, "TV gamma set to {} which is not supported", gamma);
 	}
 
 	bool GX2GetLastFrame(uint32 deviceId, GX2Texture* textureOut)
@@ -271,72 +201,47 @@ namespace GX2
 		return 1;
 	}
 
-	void GX2Invalidate(GX2InvalidationFlag invalidationFlags, MPTR invalidationAddr, uint32 invalidationSize)
+	void GX2Invalidate(uint32 invalidationFlags, MPTR invalidationAddr, uint32 invalidationSize)
 	{
-		Latte::E_COHER_CNTL coherCntl{};
+		uint32 surfaceSyncFlags = 0;
 
-	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_ATTRIB) || HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_TEXTURE))
-	        coherCntl |= Latte::E_COHER_CNTL::TC_ACTION_ENA;
+		if (invalidationFlags & 0x04)
+		{
+			// uniform block
+			surfaceSyncFlags |= 0x8800000;
+		}
+		if (invalidationFlags & 0x01)
+		{
+			// attribute data
+			surfaceSyncFlags |= 0x800000;
+		}
 
-	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_UNIFORM_BLOCK))
-	        coherCntl |= Latte::E_COHER_CNTL::TC_ACTION_ENA | Latte::E_COHER_CNTL::SH_ACTION_ENA;
+		if (invalidationFlags & 0x40)
+		{
+			// CPU cache
+			LatteBufferCache_notifyDCFlush(invalidationAddr, invalidationSize);
+		}
 
-	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_SHADER))
-	        coherCntl |= Latte::E_COHER_CNTL::SH_ACTION_ENA;
-
-	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_COLOR_BUFFER))
-	    {
-	        coherCntl |= Latte::E_COHER_CNTL::CB_ACTION_ENA | Latte::E_COHER_CNTL::CB_ALL_DEST_BASE_ENA;
-	    }
-
-	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_DEPTH_BUFFER))
-	        coherCntl |= Latte::E_COHER_CNTL::DB_ACTION_ENA | Latte::E_COHER_CNTL::DB_DEST_BASE_ENA;
-
-	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_STREAM_OUT))
-	    {
-	        coherCntl |= Latte::E_COHER_CNTL::SX_ACTION_ENA
-	                   | Latte::E_COHER_CNTL::SO0_DEST_BASE_ENA | Latte::E_COHER_CNTL::SO1_DEST_BASE_ENA
-	                   | Latte::E_COHER_CNTL::SO2_DEST_BASE_ENA | Latte::E_COHER_CNTL::SO3_DEST_BASE_ENA;
-	    }
-
-	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_EXPORT_BUFFER))
-	    {
-	        coherCntl |= Latte::E_COHER_CNTL::SX_ACTION_ENA
-	                   | Latte::E_COHER_CNTL::DB_ACTION_ENA
-	                   | Latte::E_COHER_CNTL::CB_ACTION_ENA
-	                   | Latte::E_COHER_CNTL::TC_ACTION_ENA
-	                   | Latte::E_COHER_CNTL::DEST_BASE_0_ENA;
-	    }
-
-	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::CPU))
-	        LatteBufferCache_notifyDCFlush(invalidationAddr, invalidationSize);
-
-	    if (coherCntl == static_cast<Latte::E_COHER_CNTL>(0))
-	        return; // no GPU-side invalidation
-
-	    coherCntl |= Latte::E_COHER_CNTL::ENGINE_ME;
-
-	    uint32 physicalAddr = memory_virtualToPhysical(invalidationAddr);
-	    uint32 sizeUnits = (invalidationSize == 0xFFFFFFFFu) ? 0x00FFFFFFu : ((invalidationSize + 0xFF) >> 8);
-
-	    GX2ReserveCmdSpace(5);
-	    gx2WriteGather_submitU32AsBE(pm4HeaderType3(IT_SURFACE_SYNC, 4));
-	    gx2WriteGather_submitU32AsBE(static_cast<uint32>(coherCntl));
-	    gx2WriteGather_submitU32AsBE(sizeUnits);
-	    gx2WriteGather_submitU32AsBE(physicalAddr >> 8);
-	    gx2WriteGather_submitU32AsBE(4u);
+		if (surfaceSyncFlags != 0)
+		{
+			GX2ReserveCmdSpace(5);
+			// write PM4 command
+			gx2WriteGather_submitU32AsBE(pm4HeaderType3(IT_SURFACE_SYNC, 4)); // IT_SURFACE_SYNC + 4 data dwords
+			gx2WriteGather_submitU32AsBE(surfaceSyncFlags);
+			gx2WriteGather_submitU32AsBE((invalidationSize + 0xFF) >> 8); // size
+			gx2WriteGather_submitU32AsBE(memory_virtualToPhysical(invalidationAddr) >> 8); // base address (divided by 0x100)
+			gx2WriteGather_submitU32AsBE(0x00000004); // poll interval
+		}
 	}
 
 	void GX2MiscInit()
 	{
 		cafeExportRegister("gx2", GX2Init, LogType::GX2);
-		cafeExportRegister("gx2", GX2Shutdown, LogType::GX2);
 		cafeExportRegister("gx2", GX2GetMainCoreId, LogType::GX2);
 		cafeExportRegister("gx2", GX2ResetGPU, LogType::GX2);
 
 		cafeExportRegister("gx2", GX2SetTVBuffer, LogType::GX2);
 		cafeExportRegister("gx2", GX2SetTVGamma, LogType::GX2);
-		cafeExportRegister("gx2", GX2SetDRCGamma, LogType::GX2);
 
 		cafeExportRegister("gx2", GX2GetLastFrame, LogType::GX2);
 		cafeExportRegister("gx2", GX2GetLastFrameGammaA, LogType::GX2);

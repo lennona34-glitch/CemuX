@@ -21,16 +21,6 @@ public:
 	};
 
 public:
-	~PPCFunctionBoundaryTracker()
-	{
-		while (!map_ranges.empty())
-		{
-			PPCRange_t* range = *map_ranges.begin();
-			delete range;
-			map_ranges.erase(map_ranges.begin());
-		}
-	}
-
 	void trackStartPoint(MPTR startAddress)
 	{
 		processRange(startAddress, nullptr, nullptr);
@@ -50,37 +40,10 @@ public:
 		return false;
 	}
 
-	std::vector<PPCRange_t> GetRanges()
-	{
-		std::vector<PPCRange_t> r;
-		for (auto& it : map_ranges)
-			r.emplace_back(*it);
-		return r;
-	}
-
-	bool ContainsAddress(uint32 addr) const
-	{
-		for (auto& it : map_ranges)
-		{
-			if (addr >= it->startAddress && addr < it->getEndAddress())
-				return true;
-		}
-		return false;
-	}
-
-	const std::set<uint32>& GetBranchTargets() const
-	{
-		return map_branchTargetsAll;
-	}
-
 private:
 	void addBranchDestination(PPCRange_t* sourceRange, MPTR address)
 	{
-		// data that gets scanned as code can decode as a branch to unmapped memory
-		if (!memory_isAddressRangeAccessible(address, 4))
-			return;
-		map_queuedBranchTargets.emplace(address);
-		map_branchTargetsAll.emplace(address);
+		map_branchTargets.emplace(address);
 	}
 
 	// process flow of instruction
@@ -134,8 +97,8 @@ private:
 				// if the next two or previous two instructions are branch instructions, we assume that they are destinations of a jump table
 				// todo - can we make this more reliable by checking for BCTR or similar instructions first?
 				// example: The Swapper 0x01B1FC04
-				if (PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(address + 4) && PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(address + 8) ||
-					PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(address - 8) && PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(address - 4))
+				if (PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(memory_readU32(address + 4)) && PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(memory_readU32(address + 8)) ||
+					PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(memory_readU32(address - 8)) && PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(memory_readU32(address - 4)))
 				{
 					return true;
 				}
@@ -151,7 +114,7 @@ private:
 				Espresso::BOField BO;
 				uint32 BI;
 				bool LK;
-				Espresso::decodeOp_BCSPR(opcode, BO, BI, LK);
+				Espresso::decodeOp_BCLR(opcode, BO, BI, LK);
 				if (BO.branchAlways() && !LK)
 				{
 					// unconditional BLR
@@ -168,7 +131,7 @@ private:
 
 					// Currently we only end the function if the BCTR is followed by a NOP (alignment) or invalid instruction
 					// todo: improve robustness, find better ways to handle false positives
-					uint32 nextOpcode = memory_isAddressRangeAccessible(address + 4, 4) ? memory_readU32(address + 4) : 0;
+					uint32 nextOpcode = memory_readU32(address + 4);
 
 					if (nextOpcode == 0x60000000 || PPCRecompilerCalcFuncSize_isValidInstruction(nextOpcode) == false)
 					{
@@ -224,9 +187,6 @@ private:
 		MPTR endAddress = 0xFFFFFFFF;
 		if (nextRange)
 			endAddress = nextRange->startAddress;
-		// don't scan past the end of the mapped region
-		if (MMURange* mmuRange = memory_getMMURangeByAddress(startAddress); mmuRange && mmuRange->getEnd() < endAddress)
-			endAddress = mmuRange->getEnd();
 		while (currentAddress < endAddress)
 		{
 			if (!processInstruction(newRange, currentAddress))
@@ -258,7 +218,7 @@ private:
 		auto rangeItr = map_ranges.begin();
 
 		PPCRange_t* previousRange = nullptr;
-		for (std::set<uint32_t>::const_iterator targetItr = map_queuedBranchTargets.begin() ; targetItr != map_queuedBranchTargets.end(); )
+		for (std::set<uint32_t>::const_iterator targetItr = map_branchTargets.begin() ; targetItr != map_branchTargets.end(); )
 		{
 			while (rangeItr != map_ranges.end() && ((*rangeItr)->startAddress + (*rangeItr)->length) <= (*targetItr))
 			{
@@ -279,7 +239,7 @@ private:
 				(*targetItr) < ((*rangeItr)->startAddress + (*rangeItr)->length))
 			{
 				// delete visited targets
-				targetItr = map_queuedBranchTargets.erase(targetItr);
+				targetItr = map_branchTargets.erase(targetItr);
 				continue;
 			}
 
@@ -299,12 +259,8 @@ private:
 	}
 
 	private:
-	bool PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(MPTR address)
+	bool PPCRecompilerCalcFuncSize_isUnconditionalBranchInstruction(uint32 opcode)
 	{
-		// neighbours can be unmapped
-		if (!memory_isAddressRangeAccessible(address, 4))
-			return false;
-		uint32 opcode = memory_readU32(address);
 		if (Espresso::GetPrimaryOpcode(opcode) == Espresso::PrimaryOpcode::B)
 		{
 			uint32 LI;
@@ -333,6 +289,5 @@ private:
 	};
 
 	std::set<PPCRange_t*, RangePtrCmp> map_ranges;
-	std::set<uint32> map_queuedBranchTargets;
-	std::set<uint32> map_branchTargetsAll;
+	std::set<uint32> map_branchTargets;
 };

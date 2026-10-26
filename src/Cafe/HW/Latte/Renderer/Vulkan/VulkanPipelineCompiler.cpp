@@ -6,10 +6,62 @@
 #include "Cafe/HW/Latte/Core/LattePerformanceMonitor.h"
 #include "Cafe/OS/libs/gx2/GX2.h"
 #include "config/ActiveSettings.h"
-#include "util/helpers/helpers.h"
 #include "util/helpers/Serializer.h"
 #include "Cafe/HW/Latte/Common/RegisterSerializer.h"
-#include "HW/Latte/Renderer/RendererCore.h"
+
+std::mutex s_nvidiaWorkaround;
+
+/* rects emulation */
+
+void rectsEmulationGS_outputSingleVertex(std::string& gsSrc, LatteDecompilerShader* vertexShader, LatteShaderPSInputTable* psInputTable, sint32 vIdx, const LatteContextRegister& latteRegister)
+{
+	auto parameterMask = vertexShader->outputParameterMask;
+	for (uint32 i = 0; i < 32; i++)
+	{
+		if ((parameterMask & (1 << i)) == 0)
+			continue;
+		sint32 vsSemanticId = psInputTable->getVertexShaderOutParamSemanticId(latteRegister.GetRawView(), i);
+		if (vsSemanticId < 0)
+			continue;
+		// make sure PS has matching input
+		if (!psInputTable->hasPSImportForSemanticId(vsSemanticId))
+			continue;
+		gsSrc.append(fmt::format("passParameterSem{}Out = passParameterSem{}In[{}];\r\n", vsSemanticId, vsSemanticId, vIdx));
+	}
+	gsSrc.append(fmt::format("gl_Position = gl_in[{}].gl_Position;\r\n", vIdx));
+	gsSrc.append("EmitVertex();\r\n");
+}
+
+void rectsEmulationGS_outputGeneratedVertex(std::string& gsSrc, LatteDecompilerShader* vertexShader, LatteShaderPSInputTable* psInputTable, const char* variant, const LatteContextRegister& latteRegister)
+{
+	auto parameterMask = vertexShader->outputParameterMask;
+	for (uint32 i = 0; i < 32; i++)
+	{
+		if ((parameterMask & (1 << i)) == 0)
+			continue;
+		sint32 vsSemanticId = psInputTable->getVertexShaderOutParamSemanticId(latteRegister.GetRawView(), i);
+		if (vsSemanticId < 0)
+			continue;
+		// make sure PS has matching input
+		if (!psInputTable->hasPSImportForSemanticId(vsSemanticId))
+			continue;
+		gsSrc.append(fmt::format("passParameterSem{}Out = gen4thVertex{}(passParameterSem{}In[0], passParameterSem{}In[1], passParameterSem{}In[2]);\r\n", vsSemanticId, variant, vsSemanticId, vsSemanticId, vsSemanticId));
+	}
+	gsSrc.append(fmt::format("gl_Position = gen4thVertex{}(gl_in[0].gl_Position, gl_in[1].gl_Position, gl_in[2].gl_Position);\r\n", variant));
+	gsSrc.append("EmitVertex();\r\n");
+}
+
+void rectsEmulationGS_outputVerticesCode(std::string& gsSrc, LatteDecompilerShader* vertexShader, LatteShaderPSInputTable* psInputTable, sint32 p0, sint32 p1, sint32 p2, sint32 p3, const char* variant, const LatteContextRegister& latteRegister)
+{
+	sint32 pList[4] = { p0, p1, p2, p3 };
+	for (sint32 i = 0; i < 4; i++)
+	{
+		if (pList[i] == 3)
+			rectsEmulationGS_outputGeneratedVertex(gsSrc, vertexShader, psInputTable, variant, latteRegister);
+		else
+			rectsEmulationGS_outputSingleVertex(gsSrc, vertexShader, psInputTable, pList[i], latteRegister);
+	}
+}
 
 RendererShaderVk* rectsEmulationGS_generate(LatteDecompilerShader* vertexShader, const LatteContextRegister& latteRegister)
 {
@@ -126,54 +178,54 @@ PipelineCompiler::~PipelineCompiler()
 		m_renderPassObj->decRef();
 };
 
-VkFormat PipelineCompiler::GetVertexFormat(Latte::E_HWFMT format)
+VkFormat PipelineCompiler::GetVertexFormat(uint8 format)
 {
 	switch (format)
 	{
-	case Latte::E_HWFMT::HWFMT_32_32_32_32_FLOAT:
+	case FMT_32_32_32_32_FLOAT:
 		return VK_FORMAT_R32G32B32A32_UINT;
-	case Latte::E_HWFMT::HWFMT_32_32_32_FLOAT:
+	case FMT_32_32_32_FLOAT:
 		return VK_FORMAT_R32G32B32_UINT;
-	case Latte::E_HWFMT::HWFMT_32_32_FLOAT:
+	case FMT_32_32_FLOAT:
 		return VK_FORMAT_R32G32_UINT;
-	case Latte::E_HWFMT::HWFMT_32_FLOAT:
+	case FMT_32_FLOAT:
 		return VK_FORMAT_R32_UINT;
-	case Latte::E_HWFMT::HWFMT_8_8_8_8:
+	case FMT_8_8_8_8:
 		return VK_FORMAT_R8G8B8A8_UINT;
-	case Latte::E_HWFMT::HWFMT_8_8_8:
+	case FMT_8_8_8:
 		return VK_FORMAT_R8G8B8_UINT;
-	case Latte::E_HWFMT::HWFMT_8_8:
+	case FMT_8_8:
 		return VK_FORMAT_R8G8_UINT;
-	case Latte::E_HWFMT::HWFMT_8:
+	case FMT_8:
 		return VK_FORMAT_R8_UINT;
-	case Latte::E_HWFMT::HWFMT_32_32_32_32:
+	case FMT_32_32_32_32:
 		return VK_FORMAT_R32G32B32A32_UINT;
-	case Latte::E_HWFMT::HWFMT_32_32_32:
+	case FMT_32_32_32:
 		return VK_FORMAT_R32G32B32_UINT;
-	case Latte::E_HWFMT::HWFMT_32_32:
+	case FMT_32_32:
 		return VK_FORMAT_R32G32_UINT;
-	case Latte::E_HWFMT::HWFMT_32:
+	case FMT_32:
 		return VK_FORMAT_R32_UINT;
-	case Latte::E_HWFMT::HWFMT_16_16_16_16:
+	case FMT_16_16_16_16:
 		return VK_FORMAT_R16G16B16A16_UINT; // verified to match OpenGL
-	case Latte::E_HWFMT::HWFMT_16_16_16:
+	case FMT_16_16_16:
 		return VK_FORMAT_R16G16B16_UINT;
-	case Latte::E_HWFMT::HWFMT_16_16:
+	case FMT_16_16:
 		return VK_FORMAT_R16G16_UINT;
-	case Latte::E_HWFMT::HWFMT_16:
+	case FMT_16:
 		return VK_FORMAT_R16_UINT;
-	case Latte::E_HWFMT::HWFMT_16_16_16_16_FLOAT:
+	case FMT_16_16_16_16_FLOAT:
 		return VK_FORMAT_R16G16B16A16_UINT; // verified to match OpenGL
-	case Latte::E_HWFMT::HWFMT_16_16_16_FLOAT:
+	case FMT_16_16_16_FLOAT:
 		return VK_FORMAT_R16G16B16_UINT;
-	case Latte::E_HWFMT::HWFMT_16_16_FLOAT:
+	case FMT_16_16_FLOAT:
 		return VK_FORMAT_R16G16_UINT;
-	case Latte::E_HWFMT::HWFMT_16_FLOAT:
+	case FMT_16_FLOAT:
 		return VK_FORMAT_R16_UINT;
-	case Latte::E_HWFMT::HWFMT_2_10_10_10:
+	case FMT_2_10_10_10:
 		return VK_FORMAT_R32_UINT; // verified to match OpenGL
 	default:
-		cemuLog_log(LogType::Force, "Unsupported vertex format: {:02x}", (uint32)format);
+		cemuLog_log(LogType::Force, "Unsupported vertex format: {:02x}", format);
 		assert_dbg();
 		return VK_FORMAT_UNDEFINED;
 	}
@@ -506,8 +558,8 @@ void PipelineCompiler::InitRasterizerState(const LatteContextRegister& latteRegi
 	rasterizerExt.flags = 0;
 
 	rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+	rasterizer.pNext = &rasterizerExt;
 	rasterizer.rasterizerDiscardEnable = LatteGPUState.contextNew.PA_CL_CLIP_CNTL.get_DX_RASTERIZATION_KILL();
-	rasterizer.pNext = VulkanRenderer::GetInstance()->m_featureControl.deviceExtensions.depth_clip_enable ? &rasterizerExt : nullptr;
 	// GX2SetSpecialState(0, true) workaround
 	if (!LatteGPUState.contextNew.PA_CL_VTE_CNTL.get_VPORT_X_OFFSET_ENA())
 		rasterizer.rasterizerDiscardEnable = false;
@@ -678,7 +730,7 @@ void PipelineCompiler::InitDescriptorSetLayouts(VulkanRenderer* vkRenderer, Pipe
 	{
 		cemu_assert_debug(descriptorSetLayoutCount == 0);
 		CreateDescriptorSetLayout(vkRenderer, vertexShader, descriptorSetLayout[descriptorSetLayoutCount], vkrPipelineInfo);
-		vkObjPipeline->m_vertexDSL = descriptorSetLayout[descriptorSetLayoutCount];
+		vkObjPipeline->vertexDSL = descriptorSetLayout[descriptorSetLayoutCount];
 		descriptorSetLayoutCount++;
 	}
 
@@ -686,7 +738,7 @@ void PipelineCompiler::InitDescriptorSetLayouts(VulkanRenderer* vkRenderer, Pipe
 	{
 		cemu_assert_debug(descriptorSetLayoutCount == 1);
 		CreateDescriptorSetLayout(vkRenderer, pixelShader, descriptorSetLayout[descriptorSetLayoutCount], vkrPipelineInfo);
-		vkObjPipeline->m_pixelDSL = descriptorSetLayout[descriptorSetLayoutCount];
+		vkObjPipeline->pixelDSL = descriptorSetLayout[descriptorSetLayoutCount];
 		descriptorSetLayoutCount++;
 	}
 	else if (geometryShader)
@@ -705,7 +757,7 @@ void PipelineCompiler::InitDescriptorSetLayouts(VulkanRenderer* vkRenderer, Pipe
 	{
 		cemu_assert_debug(descriptorSetLayoutCount == 2);
 		CreateDescriptorSetLayout(vkRenderer, geometryShader, descriptorSetLayout[descriptorSetLayoutCount], vkrPipelineInfo);
-		vkObjPipeline->m_geometryDSL = descriptorSetLayout[descriptorSetLayoutCount];
+		vkObjPipeline->geometryDSL = descriptorSetLayout[descriptorSetLayoutCount];
 		descriptorSetLayoutCount++;
 	}
 }
@@ -815,17 +867,13 @@ void PipelineCompiler::InitDynamicState(PipelineInfo* pipelineInfo, bool usesBle
 		dynamicStates.emplace_back(VK_DYNAMIC_STATE_DEPTH_BIAS);
 		pipelineInfo->usesDepthBias = true;
 	}
-	if (VulkanRenderer::GetInstance()->UseAttachmentFeedbackLoop())
-	{
-		dynamicStates.emplace_back(VK_DYNAMIC_STATE_ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT);
-	}
 
 	dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
 	dynamicState.dynamicStateCount = dynamicStates.size();
 	dynamicState.pDynamicStates = dynamicStates.data();
 }
 
-bool PipelineCompiler::InitFromCurrentGPUState(PipelineInfo* pipelineInfo, const LatteContextRegister& latteRegister, VKRObjectRenderPass* renderPassObj, bool requireRobustBufferAccess)
+bool PipelineCompiler::InitFromCurrentGPUState(PipelineInfo* pipelineInfo, const LatteContextRegister& latteRegister, VKRObjectRenderPass* renderPassObj)
 {
 	VulkanRenderer* vkRenderer = VulkanRenderer::GetInstance();
 
@@ -840,7 +888,6 @@ bool PipelineCompiler::InitFromCurrentGPUState(PipelineInfo* pipelineInfo, const
 	m_vkGeometryShader = pipelineInfo->geometryShaderVk;
 	m_vkrObjPipeline = pipelineInfo->m_vkrObjPipeline;
 	m_renderPassObj = renderPassObj;
-	m_requestRobustBufferAccess = requireRobustBufferAccess;
 
 	// if required generate RECT emulation geometry shader
 	if (!vkRenderer->m_featureControl.deviceExtensions.nv_fill_rectangle && isPrimitiveRect)
@@ -871,10 +918,11 @@ bool PipelineCompiler::InitFromCurrentGPUState(PipelineInfo* pipelineInfo, const
 	pipelineLayoutInfo.pPushConstantRanges = nullptr;
 	pipelineLayoutInfo.pushConstantRangeCount = 0;
 
-	VkResult result = vkCreatePipelineLayout(vkRenderer->m_logicalDevice, &pipelineLayoutInfo, nullptr, &m_pipelineLayout);
+	VkResult result = vkCreatePipelineLayout(vkRenderer->m_logicalDevice, &pipelineLayoutInfo, nullptr, &m_pipeline_layout);
 	if (result != VK_SUCCESS)
 	{
 		cemuLog_log(LogType::Force, "Failed to create pipeline layout: {}", result);
+		s_nvidiaWorkaround.unlock();
 		return false;
 	}
 
@@ -888,11 +936,11 @@ bool PipelineCompiler::InitFromCurrentGPUState(PipelineInfo* pipelineInfo, const
 
 	// ##########################################################################################################################################
 
-	pipelineInfo->m_vkrObjPipeline->m_pipelineLayout = m_pipelineLayout;
+	pipelineInfo->m_vkrObjPipeline->pipeline_layout = m_pipeline_layout;
 
 	// increment ref counter for vkrObjPipeline and renderpass object to make sure they dont get released while we are using them
 	m_vkrObjPipeline->incRef();
-	m_renderPassObj->incRef();
+	renderPassObj->incRef();
 	return true;
 }
 
@@ -941,7 +989,7 @@ bool PipelineCompiler::Compile(bool forceCompile, bool isRenderThread, bool show
 	pipelineInfo.pRasterizationState = &rasterizer;
 	pipelineInfo.pMultisampleState = &multisampling;
 	pipelineInfo.pColorBlendState = &colorBlending;
-	pipelineInfo.layout = m_pipelineLayout;
+	pipelineInfo.layout = m_pipeline_layout;
 	pipelineInfo.renderPass = m_renderPassObj->m_renderPass;
 	pipelineInfo.pDepthStencilState = &depthStencilState;
 	pipelineInfo.subpass = 0;
@@ -950,42 +998,25 @@ bool PipelineCompiler::Compile(bool forceCompile, bool isRenderThread, bool show
 	if (!forceCompile)
 		pipelineInfo.flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_EXT;
 
-	void* prevStruct = nullptr;
-
 	VkPipelineCreationFeedbackCreateInfoEXT creationFeedbackInfo;
 	VkPipelineCreationFeedbackEXT creationFeedback;
-	boost::container::static_vector<VkPipelineCreationFeedbackEXT, 3> creationStageFeedback;
+	std::vector<VkPipelineCreationFeedbackEXT> creationStageFeedback(0);
 	if (vkRenderer->m_featureControl.deviceExtensions.pipeline_feedback)
 	{
 		creationFeedback = {};
 		creationFeedback.flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT_EXT;
 
+		creationStageFeedback.reserve(pipelineInfo.stageCount);
 		for (uint32_t i = 0; i < pipelineInfo.stageCount; ++i)
-			creationStageFeedback.push_back({VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT_EXT, 0});
+			creationStageFeedback.data()[i] = { VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT_EXT, 0 };
 
 		creationFeedbackInfo = {};
 		creationFeedbackInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO_EXT;
 		creationFeedbackInfo.pPipelineCreationFeedback = &creationFeedback;
 		creationFeedbackInfo.pPipelineStageCreationFeedbacks = creationStageFeedback.data();
 		creationFeedbackInfo.pipelineStageCreationFeedbackCount = pipelineInfo.stageCount;
-		creationFeedbackInfo.pNext = prevStruct;
-		prevStruct = &creationFeedbackInfo;
+		pipelineInfo.pNext = &creationFeedbackInfo;
 	}
-
-	VkPipelineRobustnessCreateInfoEXT pipelineRobustnessCreateInfo{};
-	if (vkRenderer->m_featureControl.deviceExtensions.pipeline_robustness && m_requestRobustBufferAccess)
-	{
-		// per-pipeline handling of robust buffer access, if the extension is not available then we fall back to device feature robustBufferAccess
-		pipelineRobustnessCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO_EXT;
-		pipelineRobustnessCreateInfo.pNext = prevStruct;
-		prevStruct = &pipelineRobustnessCreateInfo;
-		pipelineRobustnessCreateInfo.storageBuffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT;
-		pipelineRobustnessCreateInfo.uniformBuffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT;
-		pipelineRobustnessCreateInfo.vertexInputs = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT_EXT;
-		pipelineRobustnessCreateInfo.images = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DEVICE_DEFAULT_EXT;
-	}
-
-	pipelineInfo.pNext = prevStruct;
 
 	VkPipeline pipeline = VK_NULL_HANDLE;
 	VkResult result;
@@ -1006,7 +1037,7 @@ bool PipelineCompiler::Compile(bool forceCompile, bool isRenderThread, bool show
 	}
 	else if (result == VK_SUCCESS)
 	{
-		m_vkrObjPipeline->SetPipeline(pipeline);
+		m_vkrObjPipeline->setPipeline(pipeline);
 	}
 	else
 	{
@@ -1043,100 +1074,4 @@ void PipelineCompiler::TrackAsCached(uint64 baseHash, uint64 pipelineStateHash)
 	if (pipelineCache.HasPipelineCached(baseHash, pipelineStateHash))
 		return;
 	pipelineCache.AddCurrentStateToCache(baseHash, pipelineStateHash);
-}
-
-// calculate whether the pipeline requires robust buffer access
-// if there is a potential risk for a shader to do out-of-bounds reads or writes we need to enable robust buffer access
-// this can happen when:
-// - Streamout is used with too small of a buffer (probably? Could also be some issue with how the streamout array index is calculated -> We can maybe fix this in the future)
-// - The shader uses dynamic indices for uniform access. This will trigger the uniform mode to be FULL_CBANK
-bool PipelineCompiler::CalcRobustBufferAccessRequirement(LatteDecompilerShader* vertexShader, LatteDecompilerShader* pixelShader, LatteDecompilerShader* geometryShader)
-{
-	bool requiresRobustBufferAcces = false;
-	if (vertexShader)
-	{
-		cemu_assert_debug(vertexShader->shaderType == LatteConst::ShaderType::Vertex);
-		requiresRobustBufferAcces |= vertexShader->hasStreamoutBufferWrite;
-		requiresRobustBufferAcces |= vertexShader->uniformMode == LATTE_DECOMPILER_UNIFORM_MODE_FULL_CBANK;
-	}
-	if (geometryShader)
-	{
-		cemu_assert_debug(geometryShader->shaderType == LatteConst::ShaderType::Geometry);
-		requiresRobustBufferAcces |= geometryShader->hasStreamoutBufferWrite;
-		requiresRobustBufferAcces |= geometryShader->uniformMode == LATTE_DECOMPILER_UNIFORM_MODE_FULL_CBANK;
-	}
-	if (pixelShader)
-	{
-		cemu_assert_debug(pixelShader->shaderType == LatteConst::ShaderType::Pixel);
-		requiresRobustBufferAcces |= pixelShader->uniformMode == LATTE_DECOMPILER_UNIFORM_MODE_FULL_CBANK;
-	}
-	return requiresRobustBufferAcces;
-}
-
-static std::vector<std::thread> s_compileThreads;
-static std::atomic_bool s_compileThreadsShutdownSignal{};
-static ConcurrentQueue<PipelineCompiler*> s_pipelineCompileRequests;
-
-static void compilePipeline_thread(sint32 threadIndex)
-{
-	SetThreadName("compilePl");
-#ifdef _WIN32
-	// to avoid starving the main cpu and render threads the pipeline compile threads run at lower priority
-	// except for one thread which we always run at normal priority to prevent the opposite scenario where all compile threads are starved
-	if(threadIndex != 0)
-		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-#endif
-	while (!s_compileThreadsShutdownSignal)
-	{
-		PipelineCompiler* request = s_pipelineCompileRequests.pop();
-		if (!request)
-			continue;
-		request->Compile(true, false, true);
-		delete request;
-	}
-}
-
-void PipelineCompiler::CompileThreadPool_Start()
-{
-	cemu_assert_debug(s_compileThreads.empty());
-	s_compileThreadsShutdownSignal = false;
-	uint32 numCompileThreads;
-
-	uint32 cpuCoreCount = GetPhysicalCoreCount();
-	if (cpuCoreCount <= 2)
-		numCompileThreads = 1;
-	else
-		numCompileThreads = 2 + (cpuCoreCount - 3); // 2 plus one additionally for every extra core above 3
-
-	numCompileThreads = std::min(numCompileThreads, 8u); // cap at 8
-
-	for (uint32_t i = 0; i < numCompileThreads; i++)
-	{
-		s_compileThreads.emplace_back(compilePipeline_thread, i);
-	}
-}
-
-void PipelineCompiler::CompileThreadPool_Stop()
-{
-	s_compileThreadsShutdownSignal = true;
-	{
-		// push one empty workload for each thread
-		// this way we can make sure that each waiting thread is woken up to see the shutdown signal
-		for (auto& thread : s_compileThreads)
-			s_pipelineCompileRequests.push(nullptr);
-	}
-	for (auto& thread : s_compileThreads)
-		thread.join();
-	while (!s_pipelineCompileRequests.empty())
-	{
-		PipelineCompiler* pipelineCompiler = s_pipelineCompileRequests.pop();
-		if (pipelineCompiler)
-			delete pipelineCompiler;
-	}
-	s_compileThreads.clear();
-}
-
-void PipelineCompiler::CompileThreadPool_QueueCompilation(PipelineCompiler* v)
-{
-	s_pipelineCompileRequests.push(v);
 }

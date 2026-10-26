@@ -362,16 +362,6 @@ namespace coreinit
 
 	static_assert(sizeof(OSFastCond) == 0x1C);
 
-	/********* TLS *********/
-
-	struct OSTLSBlock
-	{
-		MPTR addr;
-		uint32 ukn04;
-	};
-
-	static_assert(sizeof(OSTLSBlock) == 8);
-
 };
 
 struct OSThread_t
@@ -500,7 +490,7 @@ struct OSThread_t
 	// TLS
 	/* +0x664 */ uint16								numAllocatedTLSBlocks;
 	/* +0x666 */ sint16								tlsStatus;
-	/* +0x668 */ MEMPTR<coreinit::OSTLSBlock>		tlsBlocks;
+	/* +0x668 */ MPTR								tlsBlocksMPTR;
 	
 	/* +0x66C */ MEMPTR<coreinit::OSFastMutex>		waitingForFastMutex;
 	/* +0x670 */ coreinit::OSFastMutexLink			contendedFastMutex;
@@ -513,9 +503,7 @@ static_assert(sizeof(OSThread_t) == 0x6A0);
 
 namespace coreinit
 {
-	void MapThreadExports();
 	void InitializeThread();
-
 	void InitializeConcurrency();
 
 	bool __CemuIsMulticoreMode();
@@ -620,7 +608,6 @@ namespace coreinit
 	// scheduler
 	void OSSchedulerBegin(sint32 numCPUEmulationThreads);
 	void OSSchedulerEnd();
-	bool OSIsSchedulerActive();
 
 	// internal
 	void __OSAddReadyThreadToRunQueue(OSThread_t* thread);

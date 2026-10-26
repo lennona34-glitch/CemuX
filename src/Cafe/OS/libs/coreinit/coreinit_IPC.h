@@ -4,7 +4,6 @@
 namespace coreinit
 {
 	void IPCDriver_NotifyResponses(uint32 ppcCoreIndex, IPCCommandBody** responseArray, uint32 numResponses);
-	void IPCCloseAllHandles();
 
 	IOSDevHandle IOS_Open(const char* devicePath, uint32 flags);
 	IOS_ERROR IOS_Close(IOSDevHandle devHandle);
@@ -13,6 +12,5 @@ namespace coreinit
 	IOS_ERROR IOS_Ioctlv(IOSDevHandle devHandle, uint32 requestId, uint32 numIn, uint32 numOut, IPCIoctlVector* vec);
 	IOS_ERROR IOS_IoctlvAsync(IOSDevHandle devHandle, uint32 requestId, uint32 numIn, uint32 numOut, IPCIoctlVector* vec, MEMPTR<void> asyncResultFunc, MEMPTR<void> asyncResultUserParam);
 
-	void MapIPCExports();
 	void InitializeIPC();
 };

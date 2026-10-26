@@ -12,70 +12,26 @@
 #include <numbers>
 #include <queue>
 
-void WiimoteControllerProvider::StartThreads()
+WiimoteControllerProvider::WiimoteControllerProvider()
+	: m_running(true)
 {
-	if (!m_threadsRunning.exchange(true))
-	{
-		FindDevices(); // get controller list immediately so it's available when StartThreads() returns (as it is called by get_controllers initially)
-		m_reader_thread = std::thread(&WiimoteControllerProvider::reader_thread, this);
-		m_writer_thread = std::thread(&WiimoteControllerProvider::writer_thread, this);
-		m_connectionThread = std::thread(&WiimoteControllerProvider::connectionThread, this);
-	}
+	m_reader_thread = std::thread(&WiimoteControllerProvider::reader_thread, this);
+	m_writer_thread = std::thread(&WiimoteControllerProvider::writer_thread, this);
+	m_connectionThread = std::thread(&WiimoteControllerProvider::connectionThread, this);
 }
 
 WiimoteControllerProvider::~WiimoteControllerProvider()
 {
-	StopThreads();
-}
-
-void WiimoteControllerProvider::StopThreads()
-{
-	if (m_threadsRunning.exchange(false))
+	if (m_running)
 	{
-		{
-			std::scoped_lock lock(m_writer_mutex); 
-			m_writer_cond.notify_all();
-		}
-
-		{
-			std::scoped_lock lock(m_connectionMutex);
-			m_connectionCond.notify_all();
-		}
-
-		if (m_writer_thread.joinable())
-		{
-			m_writer_thread.join();
-		}
-
-		if (m_reader_thread.joinable())
-		{
-			m_reader_thread.join();
-		}
-
-		if (m_connectionThread.joinable())
-		{
-			m_connectionThread.join();
-		}
+		m_running = false;
+		m_writer_thread.join();
+		m_reader_thread.join();
+		m_connectionThread.join();
 	}
 }
 
 std::vector<std::shared_ptr<ControllerBase>> WiimoteControllerProvider::get_controllers()
-{
-	StartThreads();
-	RefreshControllers();
-
-	std::scoped_lock lock(m_device_mutex);
-	std::vector<std::shared_ptr<ControllerBase>> result;
-	result.reserve(m_wiimotes.size());
-	for (size_t i = 0; i < m_wiimotes.size(); ++i)
-	{
-		result.emplace_back(std::make_shared<NativeWiimoteController>(i));
-	}
-
-	return result;
-}
-
-void WiimoteControllerProvider::RefreshControllers()
 {
 	m_connectedDeviceMutex.lock();
 	auto devices = m_connectedDevices;
@@ -113,6 +69,15 @@ void WiimoteControllerProvider::RefreshControllers()
 		else
 			m_wiimotes.push_back(std::make_unique<Wiimote>(device));
 	}
+
+	std::vector<std::shared_ptr<ControllerBase>> result;
+	result.reserve(m_wiimotes.size());
+	for (size_t i = 0; i < m_wiimotes.size(); ++i)
+	{
+		result.emplace_back(std::make_shared<NativeWiimoteController>(i));
+	}
+
+	return result;
 }
 
 bool WiimoteControllerProvider::is_connected(size_t index)
@@ -185,31 +150,26 @@ WiimoteControllerProvider::WiimoteState WiimoteControllerProvider::get_state(siz
 	return {};
 }
 
-void WiimoteControllerProvider::FindDevices()
-{
-	std::vector<WiimoteDevicePtr> devices;
-#ifdef HAS_HIDAPI
-	const auto& hidDevices = HidapiWiimote::get_devices();
-	std::ranges::move(hidDevices, std::back_inserter(devices));
-#endif
-#ifdef HAS_BLUEZ
-	const auto& l2capDevices = L2CapWiimote::get_devices();
-	std::ranges::move(l2capDevices, std::back_inserter(devices));
-#endif
-	std::scoped_lock lock(m_connectedDeviceMutex);
-	m_connectedDevices = std::move(devices);
-}
-
 void WiimoteControllerProvider::connectionThread()
 {
 	SetThreadName("Wiimote-connect");
-	while (m_threadsRunning.load(std::memory_order_relaxed))
+	while (m_running.load(std::memory_order_relaxed))
 	{
-		std::unique_lock<std::mutex> lock(m_connectionMutex);
-		if (m_connectionCond.wait_for(lock, std::chrono::seconds(2), [this]() { return !m_threadsRunning.load(std::memory_order_relaxed); }))
-			return;
-		lock.unlock();
-		FindDevices();
+		std::vector<WiimoteDevicePtr> devices;
+#ifdef HAS_HIDAPI
+		const auto& hidDevices = HidapiWiimote::get_devices();
+		std::ranges::move(hidDevices, std::back_inserter(devices));
+#endif
+#ifdef HAS_BLUEZ
+		const auto& l2capDevices = L2CapWiimote::get_devices();
+		std::ranges::move(l2capDevices, std::back_inserter(devices));
+#endif
+		{
+			std::scoped_lock lock(m_connectedDeviceMutex);
+			m_connectedDevices.clear();
+			std::ranges::move(devices, std::back_inserter(m_connectedDevices));
+		}
+		std::this_thread::sleep_for(std::chrono::seconds(2));
 	}
 }
 
@@ -218,13 +178,13 @@ void WiimoteControllerProvider::reader_thread()
 {
 	SetThreadName("Wiimote-reader");
 	std::chrono::steady_clock::time_point lastCheck = {};
-	while (m_threadsRunning.load(std::memory_order_relaxed))
+	while (m_running.load(std::memory_order_relaxed))
 	{
 		const auto now = std::chrono::steady_clock::now();
 		if (std::chrono::duration_cast<std::chrono::seconds>(now - lastCheck) > std::chrono::milliseconds(500))
 		{
 			// check for new connected wiimotes
-			RefreshControllers();
+			get_controllers();
 			lastCheck = std::chrono::steady_clock::now();
 		}
 
@@ -363,7 +323,6 @@ void WiimoteControllerProvider::reader_thread()
 							break;
 						case kExtensionClassicPro:
                             cemuLog_logDebug(LogType::Force,"Extension Type Received: Classic Pro");
-							new_state.m_extension = ClassicData{};
                             break;
 						case kExtensionGuitar:
                             cemuLog_logDebug(LogType::Force,"Extension Type Received: Guitar");
@@ -383,9 +342,6 @@ void WiimoteControllerProvider::reader_thread()
                             cemuLog_logDebug(LogType::Force,"Extension only partially inserted");
 							new_state.m_extension = {};
 							request_status(index);
-							break;
-						case kExtensionMotionPlusInactive:
-                            cemuLog_logDebug(LogType::Force,"Extension Type Received: Inactive MotionPlus");
 							break;
 						default:
                             cemuLog_logDebug(LogType::Force,"Unknown extension: {:#x}", be_type.value());
@@ -792,9 +748,8 @@ void WiimoteControllerProvider::rotate_ir(WiimoteState& wiimote_state)
 			continue;
 		// move to center, rotate and move back
 		dot.pos -= 0.5f;
-		auto tmp = dot.pos;
-		dot.pos.x = (tmp.x * cos) + (tmp.y * (-sin));
-		dot.pos.y = (tmp.x * sin) + (tmp.y * cos);
+		dot.pos.x = (dot.pos.x * cos) + (dot.pos.y * (-sin));
+		dot.pos.y = (dot.pos.x * sin) + (dot.pos.y * cos);
 		dot.pos += 0.5f;
 	}
 }
@@ -968,14 +923,14 @@ void WiimoteControllerProvider::set_motion_plus(size_t index, bool state)
 void WiimoteControllerProvider::writer_thread()
 {
 	SetThreadName("Wiimote-writer");
-	while (m_threadsRunning.load(std::memory_order_relaxed))
+	while (m_running.load(std::memory_order_relaxed))
 	{
 		std::unique_lock writer_lock(m_writer_mutex);
 		while (m_write_queue.empty())
 		{
 			if (m_writer_cond.wait_for(writer_lock, std::chrono::milliseconds(250)) == std::cv_status::timeout)
 			{
-				if (!m_threadsRunning.load(std::memory_order_relaxed))
+				if (!m_running.load(std::memory_order_relaxed))
 					return;
 			}
 		}

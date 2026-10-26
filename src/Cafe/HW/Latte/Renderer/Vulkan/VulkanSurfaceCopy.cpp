@@ -357,7 +357,7 @@ CopySurfacePipelineInfo* VulkanRenderer::copySurface_getOrCreateGraphicsPipeline
 	layoutInfo.bindingCount = (uint32_t)descriptorSetLayoutBindings.size();
 	layoutInfo.pBindings = descriptorSetLayoutBindings.data();
 
-	if (vkCreateDescriptorSetLayout(m_logicalDevice, &layoutInfo, nullptr, &vkObjPipeline->m_pixelDSL) != VK_SUCCESS)
+	if (vkCreateDescriptorSetLayout(m_logicalDevice, &layoutInfo, nullptr, &vkObjPipeline->pixelDSL) != VK_SUCCESS)
 		UnrecoverableError(fmt::format("Failed to create descriptor set layout for surface copy shader").c_str());
 
 	// ##########################################################################################################################################
@@ -370,15 +370,15 @@ CopySurfacePipelineInfo* VulkanRenderer::copySurface_getOrCreateGraphicsPipeline
 	VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
 	pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 	pipelineLayoutInfo.setLayoutCount = 1;
-	pipelineLayoutInfo.pSetLayouts = &vkObjPipeline->m_pixelDSL;
+	pipelineLayoutInfo.pSetLayouts = &vkObjPipeline->pixelDSL;
 	pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 	pipelineLayoutInfo.pushConstantRangeCount = 1;
 
-	VkResult result = vkCreatePipelineLayout(m_logicalDevice, &pipelineLayoutInfo, nullptr, &vkObjPipeline->m_pipelineLayout);
+	VkResult result = vkCreatePipelineLayout(m_logicalDevice, &pipelineLayoutInfo, nullptr, &vkObjPipeline->pipeline_layout);
 	if (result != VK_SUCCESS)
 	{
 		cemuLog_log(LogType::Force, "Failed to create pipeline layout: {}", result);
-		vkObjPipeline->SetPipeline(VK_NULL_HANDLE);
+		vkObjPipeline->pipeline = VK_NULL_HANDLE;
 		return copyPipeline;
 	}
 
@@ -425,7 +425,7 @@ CopySurfacePipelineInfo* VulkanRenderer::copySurface_getOrCreateGraphicsPipeline
 	pipelineInfo.pRasterizationState = &rasterizer;
 	pipelineInfo.pMultisampleState = &multisampling;
 	pipelineInfo.pColorBlendState = state.destinationTexture->isDepth?nullptr:&colorBlending;
-	pipelineInfo.layout = vkObjPipeline->m_pipelineLayout;
+	pipelineInfo.layout = vkObjPipeline->pipeline_layout;
 	pipelineInfo.renderPass = copyPipeline->vkObjRenderPass->m_renderPass;
 	pipelineInfo.pDepthStencilState = &depthStencilState;
 	pipelineInfo.subpass = 0;
@@ -434,16 +434,17 @@ CopySurfacePipelineInfo* VulkanRenderer::copySurface_getOrCreateGraphicsPipeline
 
 	copyPipeline->vkObjPipeline = vkObjPipeline;
 
-	VkPipeline pipeline = VK_NULL_HANDLE;
-	result = vkCreateGraphicsPipelines(m_logicalDevice, m_pipeline_cache, 1, &pipelineInfo, nullptr, &pipeline);
+	result = vkCreateGraphicsPipelines(m_logicalDevice, m_pipeline_cache, 1, &pipelineInfo, nullptr, &copyPipeline->vkObjPipeline->pipeline);
 	if (result != VK_SUCCESS)
 	{
-		copyPipeline->vkObjPipeline->SetPipeline(nullptr);
 		cemuLog_log(LogType::Force, "Failed to create graphics pipeline for surface copy. Error {} Info:", (sint32)result);
-		cemu_assert_suspicious();
+		cemu_assert_debug(false);
+		copyPipeline->vkObjPipeline->pipeline = VK_NULL_HANDLE;
 	}
-	else
-		copyPipeline->vkObjPipeline->SetPipeline(pipeline);
+	//performanceMonitor.vk.numGraphicPipelines.increment();
+
+	//m_pipeline_cache_semaphore.notify();
+
 	return copyPipeline;
 }
 
@@ -521,7 +522,7 @@ VKRObjectDescriptorSet* VulkanRenderer::surfaceCopy_getOrCreateDescriptorSet(VkC
 	allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 	allocInfo.descriptorPool = m_descriptorPool;
 	allocInfo.descriptorSetCount = 1;
-	allocInfo.pSetLayouts = &pipelineInfo->vkObjPipeline->m_pixelDSL;
+	allocInfo.pSetLayouts = &(pipelineInfo->vkObjPipeline->pixelDSL);
 
 	if (vkAllocateDescriptorSets(m_logicalDevice, &allocInfo, &vkObjDescriptorSet->descriptorSet) != VK_SUCCESS)
 	{
@@ -557,7 +558,7 @@ VKRObjectDescriptorSet* VulkanRenderer::surfaceCopy_getOrCreateDescriptorSet(VkC
 
 	descriptorImageInfo.sampler = vkObjImageView->m_textureDefaultSampler[0];
 	descriptorImageInfo.imageView = vkObjImageView->m_textureImageView;
-	descriptorImageInfo.imageLayout = state.sourceTexture->GetDefaultLayout();
+	descriptorImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
 	VkWriteDescriptorSet write_descriptor{};
 	write_descriptor.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -643,7 +644,7 @@ void VulkanRenderer::surfaceCopy_viaDrawcall(LatteTextureVk* srcTextureVk, sint3
 	pushConstantData.srcTexelOffset[0] = 0;
 	pushConstantData.srcTexelOffset[1] = 0;
 
-	vkCmdPushConstants(m_state.currentCommandBuffer, copySurfacePipelineInfo->vkObjPipeline->m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstantData), &pushConstantData);
+	vkCmdPushConstants(m_state.currentCommandBuffer, copySurfacePipelineInfo->vkObjPipeline->pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstantData), &pushConstantData);
 
 	// draw
 	VkRenderPassBeginInfo renderPassInfo{};
@@ -673,27 +674,27 @@ void VulkanRenderer::surfaceCopy_viaDrawcall(LatteTextureVk* srcTextureVk, sint3
 
 	cemu_assert_debug(srcTextureVk->GetImageObj()->m_image != dstTextureVk->GetImageObj()->m_image);
 
-	barrier_image<SYNC_OP::IMAGE_WRITE | SYNC_OP::ANY_TRANSFER, SYNC_OP::IMAGE_READ>(srcTextureVk, srcImageSubresource, srcTextureVk->GetDefaultLayout()); // wait for any modifying operations on source image to complete
-	barrier_image<SYNC_OP::IMAGE_READ | SYNC_OP::IMAGE_WRITE | SYNC_OP::ANY_TRANSFER, SYNC_OP::IMAGE_WRITE>(dstTextureVk, dstImageSubresource, dstTextureVk->GetDefaultLayout()); // wait for any operations on destination image to complete
+	barrier_image<SYNC_OP::IMAGE_WRITE | SYNC_OP::ANY_TRANSFER, SYNC_OP::IMAGE_READ>(srcTextureVk, srcImageSubresource, VK_IMAGE_LAYOUT_GENERAL); // wait for any modifying operations on source image to complete
+	barrier_image<SYNC_OP::IMAGE_READ | SYNC_OP::IMAGE_WRITE | SYNC_OP::ANY_TRANSFER, SYNC_OP::IMAGE_WRITE>(dstTextureVk, dstImageSubresource, VK_IMAGE_LAYOUT_GENERAL); // wait for any operations on destination image to complete
 
 	
 	vkCmdBeginRenderPass(m_state.currentCommandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-	vkCmdBindPipeline(m_state.currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, copySurfacePipelineInfo->vkObjPipeline->GetPipeline());
+	vkCmdBindPipeline(m_state.currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, copySurfacePipelineInfo->vkObjPipeline->pipeline);
 	copySurfacePipelineInfo->vkObjPipeline->flagForCurrentCommandBuffer();
 
-	m_state.currentPipeline = copySurfacePipelineInfo->vkObjPipeline->GetPipeline();
+	m_state.currentPipeline = copySurfacePipelineInfo->vkObjPipeline->pipeline;
 
 	vkCmdBindDescriptorSets(m_state.currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-		copySurfacePipelineInfo->vkObjPipeline->m_pipelineLayout, 0, 1, &vkObjDescriptorSet->descriptorSet, 0, nullptr);
+		copySurfacePipelineInfo->vkObjPipeline->pipeline_layout, 0, 1, &vkObjDescriptorSet->descriptorSet, 0, nullptr);
 	vkObjDescriptorSet->flagForCurrentCommandBuffer();
 
 	vkCmdDraw(m_state.currentCommandBuffer, 6, 1, 0, 0);
 
 	vkCmdEndRenderPass(m_state.currentCommandBuffer);
 
-	barrier_image<SYNC_OP::IMAGE_READ, SYNC_OP::IMAGE_READ | SYNC_OP::IMAGE_WRITE | SYNC_OP::ANY_TRANSFER>(srcTextureVk, srcImageSubresource, srcTextureVk->GetDefaultLayout()); // wait for drawcall to complete before any other operations on the source image
-	barrier_image<SYNC_OP::IMAGE_WRITE, SYNC_OP::IMAGE_READ | SYNC_OP::IMAGE_WRITE | SYNC_OP::ANY_TRANSFER>(dstTextureVk, dstImageSubresource, dstTextureVk->GetDefaultLayout()); // wait for drawcall to complete before any other operations on the destination image
+	barrier_image<SYNC_OP::IMAGE_READ, SYNC_OP::IMAGE_READ | SYNC_OP::IMAGE_WRITE | SYNC_OP::ANY_TRANSFER>(srcTextureVk, srcImageSubresource, VK_IMAGE_LAYOUT_GENERAL); // wait for drawcall to complete before any other operations on the source image
+	barrier_image<SYNC_OP::IMAGE_WRITE, SYNC_OP::IMAGE_READ | SYNC_OP::IMAGE_WRITE | SYNC_OP::ANY_TRANSFER>(dstTextureVk, dstImageSubresource, VK_IMAGE_LAYOUT_GENERAL); // wait for drawcall to complete before any other operations on the destination image
 
 	// restore viewport and scissor box
 	vkCmdSetViewport(m_state.currentCommandBuffer, 0, 1, &m_state.currentViewport);

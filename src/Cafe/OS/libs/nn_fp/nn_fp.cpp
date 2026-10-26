@@ -13,8 +13,6 @@ namespace nn
 {
 	namespace fp
 	{
-		constinit COSStaticData s_nnfpStaticData;
-
 		static const auto FPResult_OkZero = 0;
 		static const auto FPResult_Ok = BUILD_NN_RESULT(NN_RESULT_LEVEL_SUCCESS, NN_RESULT_MODULE_NN_FP, 0);
 		static const auto FPResult_InvalidIPCParam = BUILD_NN_RESULT(NN_RESULT_LEVEL_LVL6, NN_RESULT_MODULE_NN_FP, 0x680);
@@ -26,12 +24,12 @@ namespace nn
 			bool isAdminMode;
 			bool isLoggedIn;
 			IOSDevHandle fpdHandle;
-			CafeStaticVar<coreinit::OSMutex> fpMutex{s_nnfpStaticData};
-			CafeStaticVar<uint8, 0x12000> g_fpdAllocatorSpace{s_nnfpStaticData};
+			SysAllocator<coreinit::OSMutex> fpMutex;
+			SysAllocator<uint8, 0x12000> g_fpdAllocatorSpace;
 			VHeap* fpBufferHeap{nullptr};
 			// PPC buffers for async notification query
-			CafeStaticVar<uint32be> notificationCount{s_nnfpStaticData};
-			CafeStaticVar<iosu::fpd::FPDNotification, 256> notificationBuffer{s_nnfpStaticData};
+			SysAllocator<uint32be> notificationCount;
+			SysAllocator<iosu::fpd::FPDNotification, 256> notificationBuffer;
 			bool getNotificationCalled{false};
 			// notification handler
 			MEMPTR<void> notificationHandler{nullptr};
@@ -51,7 +49,6 @@ namespace nn
 			{
 				std::unique_lock _l(m_mtx);
 				delete g_fp.fpBufferHeap;
-				g_fp.fpBufferHeap = nullptr;
 			}
 
 			void* Allocate(uint32 size, uint32 alignment)
@@ -487,7 +484,7 @@ namespace nn
 		{
 			FP_API_BASE();
 			auto ipcCtx = std::make_unique<FPIpcContext>(iosu::fpd::FPD_REQUEST_ID::GetMyComment);
-			ipcCtx->AddOutput(myComment, sizeof(iosu::fpd::Comment));
+			ipcCtx->AddOutput(myComment, iosu::fpd::MY_COMMENT_LENGTH * sizeof(uint16be));
 			return ipcCtx->Submit(std::move(ipcCtx));
 		}
 
@@ -630,13 +627,13 @@ namespace nn
 		{
 			FP_API_BASE();
 			auto ipcCtx = std::make_unique<FPIpcContext>(iosu::fpd::FPD_REQUEST_ID::UpdateCommentAsync);
-			uint32 commentLen = CafeStringHelpers::Length(newComment, iosu::fpd::MY_COMMENT_LENGTH);
-			if (commentLen >= iosu::fpd::MY_COMMENT_LENGTH)
+			uint32 commentLen = CafeStringHelpers::Length(newComment, iosu::fpd::MY_COMMENT_LENGTH-1);
+			if (commentLen >= iosu::fpd::MY_COMMENT_LENGTH-1)
 			{
 				cemuLog_log(LogType::Force, "UpdateCommentAsync: message too long");
 				return FPResult_InvalidIPCParam;
 			}
-			ipcCtx->AddInput(newComment, sizeof(uint16be) * (commentLen + 1));
+			ipcCtx->AddInput(newComment, sizeof(uint16be) * commentLen + 2);    
 			return ipcCtx->SubmitAsync(std::move(ipcCtx), funcPtr, customParam);
 		}
 
@@ -761,93 +758,70 @@ namespace nn
 			return ipcCtx->SubmitAsync(std::move(ipcCtx), funcPtr, customParam);
 		}
 
-		class : public COSModule
+		void load()
 		{
-			public:
-			std::string_view GetName() override
-			{
-				return "nn_fp";
-			}
+			g_fp.initCounter = 0;
+			g_fp.isAdminMode = false;
+			g_fp.isLoggedIn = false;
+			g_fp.getNotificationCalled = false;
+			g_fp.notificationHandler = nullptr;
+			g_fp.notificationHandlerParam = nullptr;
 
-			void RPLUnmapped() override
-			{
-				FPIpcBufferAllocator.Destroy();
-				s_nnfpStaticData.Deallocate();
-			}
+			coreinit::OSInitMutex(&g_fp.fpMutex);
+			FPIpcBufferAllocator.Init();
 
-			void RPLMapped() override
-			{
-				s_nnfpStaticData.Allocate();
-				g_fp.initCounter = 0;
-				g_fp.isAdminMode = false;
-				g_fp.isLoggedIn = false;
-				g_fp.fpdHandle = 0;
-				g_fp.getNotificationCalled = false;
-				g_fp.notificationHandler = nullptr;
-				g_fp.notificationHandlerParam = nullptr;
+			cafeExportRegisterFunc(Initialize, "nn_fp", "Initialize__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(InitializeAdmin, "nn_fp", "InitializeAdmin__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(IsInitialized, "nn_fp", "IsInitialized__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(IsInitializedAdmin, "nn_fp", "IsInitializedAdmin__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(Finalize, "nn_fp", "Finalize__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(FinalizeAdmin, "nn_fp", "FinalizeAdmin__Q2_2nn2fpFv", LogType::NN_FP);
 
-				coreinit::OSInitMutex(&g_fp.fpMutex);
-				FPIpcBufferAllocator.Init();
+			cafeExportRegisterFunc(SetNotificationHandler, "nn_fp", "SetNotificationHandler__Q2_2nn2fpFUiPFQ3_2nn2fp16NotificationTypeUiPv_vPv", LogType::NN_FP);
 
-				cafeExportRegisterFunc(Initialize, "nn_fp", "Initialize__Q2_2nn2fpFv", LogType::NN_FP);
-				cafeExportRegisterFunc(InitializeAdmin, "nn_fp", "InitializeAdmin__Q2_2nn2fpFv", LogType::NN_FP);
-				cafeExportRegisterFunc(IsInitialized, "nn_fp", "IsInitialized__Q2_2nn2fpFv", LogType::NN_FP);
-				cafeExportRegisterFunc(IsInitializedAdmin, "nn_fp", "IsInitializedAdmin__Q2_2nn2fpFv", LogType::NN_FP);
-				cafeExportRegisterFunc(Finalize, "nn_fp", "Finalize__Q2_2nn2fpFv", LogType::NN_FP);
-				cafeExportRegisterFunc(FinalizeAdmin, "nn_fp", "FinalizeAdmin__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(LoginAsync, "nn_fp", "LoginAsync__Q2_2nn2fpFPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(HasLoggedIn, "nn_fp", "HasLoggedIn__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(IsOnline, "nn_fp", "IsOnline__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendList, "nn_fp", "GetFriendList__Q2_2nn2fpFPUiT1UiT3", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendRequestList, "nn_fp", "GetFriendRequestList__Q2_2nn2fpFPUiT1UiT3", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendListAll, "nn_fp", "GetFriendListAll__Q2_2nn2fpFPUiT1UiT3", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendListEx, "nn_fp", "GetFriendListEx__Q2_2nn2fpFPQ3_2nn2fp10FriendDataPCUiUi", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendRequestListEx, "nn_fp", "GetFriendRequestListEx__Q2_2nn2fpFPQ3_2nn2fp13FriendRequestPCUiUi", LogType::NN_FP);
+			cafeExportRegisterFunc(GetBasicInfoAsync, "nn_fp", "GetBasicInfoAsync__Q2_2nn2fpFPQ3_2nn2fp9BasicInfoPCUiUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
 
-				cafeExportRegisterFunc(SetNotificationHandler, "nn_fp", "SetNotificationHandler__Q2_2nn2fpFUiPFQ3_2nn2fp16NotificationTypeUiPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(GetMyPrincipalId, "nn_fp", "GetMyPrincipalId__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(GetMyAccountId, "nn_fp", "GetMyAccountId__Q2_2nn2fpFPc", LogType::NN_FP);
+			cafeExportRegisterFunc(GetMyScreenName, "nn_fp", "GetMyScreenName__Q2_2nn2fpFPw", LogType::NN_FP);
+			cafeExportRegisterFunc(GetMyMii, "nn_fp", "GetMyMii__Q2_2nn2fpFP12FFLStoreData", LogType::NN_FP);
+			cafeExportRegisterFunc(GetMyPlayingGame, "nn_fp", "GetMyPlayingGame__Q2_2nn2fpFPQ3_2nn2fp7GameKey", LogType::NN_FP);
+			cafeExportRegisterFunc(GetMyPreference, "nn_fp", "GetMyPreference__Q2_2nn2fpFPQ3_2nn2fp10Preference", LogType::NN_FP);
+			cafeExportRegisterFunc(GetMyComment, "nn_fp", "GetMyComment__Q2_2nn2fpFPQ3_2nn2fp7Comment", LogType::NN_FP);
 
-				cafeExportRegisterFunc(LoginAsync, "nn_fp", "LoginAsync__Q2_2nn2fpFPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(HasLoggedIn, "nn_fp", "HasLoggedIn__Q2_2nn2fpFv", LogType::NN_FP);
-				cafeExportRegisterFunc(IsOnline, "nn_fp", "IsOnline__Q2_2nn2fpFv", LogType::NN_FP);
-				cafeExportRegisterFunc(GetFriendList, "nn_fp", "GetFriendList__Q2_2nn2fpFPUiT1UiT3", LogType::NN_FP);
-				cafeExportRegisterFunc(GetFriendRequestList, "nn_fp", "GetFriendRequestList__Q2_2nn2fpFPUiT1UiT3", LogType::NN_FP);
-				cafeExportRegisterFunc(GetFriendListAll, "nn_fp", "GetFriendListAll__Q2_2nn2fpFPUiT1UiT3", LogType::NN_FP);
-				cafeExportRegisterFunc(GetFriendListEx, "nn_fp", "GetFriendListEx__Q2_2nn2fpFPQ3_2nn2fp10FriendDataPCUiUi", LogType::NN_FP);
-				cafeExportRegisterFunc(GetFriendRequestListEx, "nn_fp", "GetFriendRequestListEx__Q2_2nn2fpFPQ3_2nn2fp13FriendRequestPCUiUi", LogType::NN_FP);
-				cafeExportRegisterFunc(GetBasicInfoAsync, "nn_fp", "GetBasicInfoAsync__Q2_2nn2fpFPQ3_2nn2fp9BasicInfoPCUiUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendAccountId, "nn_fp", "GetFriendAccountId__Q2_2nn2fpFPA17_cPCUiUi", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendScreenName, "nn_fp", "GetFriendScreenName__Q2_2nn2fpFPA11_wPCUiUibPUc", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendMii, "nn_fp", "GetFriendMii__Q2_2nn2fpFP12FFLStoreDataPCUiUi", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendPresence, "nn_fp", "GetFriendPresence__Q2_2nn2fpFPQ3_2nn2fp14FriendPresencePCUiUi", LogType::NN_FP);
+			cafeExportRegisterFunc(GetFriendRelationship, "nn_fp", "GetFriendRelationship__Q2_2nn2fpFPUcPCUiUi", LogType::NN_FP);
+			cafeExportRegisterFunc(IsJoinable, "nn_fp", "IsJoinable__Q2_2nn2fpFPCQ3_2nn2fp14FriendPresenceUL", LogType::NN_FP);
 
-				cafeExportRegisterFunc(GetMyPrincipalId, "nn_fp", "GetMyPrincipalId__Q2_2nn2fpFv", LogType::NN_FP);
-				cafeExportRegisterFunc(GetMyAccountId, "nn_fp", "GetMyAccountId__Q2_2nn2fpFPc", LogType::NN_FP);
-				cafeExportRegisterFunc(GetMyScreenName, "nn_fp", "GetMyScreenName__Q2_2nn2fpFPw", LogType::NN_FP);
-				cafeExportRegisterFunc(GetMyMii, "nn_fp", "GetMyMii__Q2_2nn2fpFP12FFLStoreData", LogType::NN_FP);
-				cafeExportRegisterFunc(GetMyPlayingGame, "nn_fp", "GetMyPlayingGame__Q2_2nn2fpFPQ3_2nn2fp7GameKey", LogType::NN_FP);
-				cafeExportRegisterFunc(GetMyPreference, "nn_fp", "GetMyPreference__Q2_2nn2fpFPQ3_2nn2fp10Preference", LogType::NN_FP);
-				cafeExportRegisterFunc(GetMyComment, "nn_fp", "GetMyComment__Q2_2nn2fpFPQ3_2nn2fp7Comment", LogType::NN_FP);
+			cafeExportRegisterFunc(CheckSettingStatusAsync, "nn_fp", "CheckSettingStatusAsync__Q2_2nn2fpFPUcPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(IsPreferenceValid, "nn_fp", "IsPreferenceValid__Q2_2nn2fpFv", LogType::NN_FP);
+			cafeExportRegisterFunc(UpdateCommentAsync, "nn_fp", "UpdateCommentAsync__Q2_2nn2fpFPCwPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(UpdatePreferenceAsync, "nn_fp", "UpdatePreferenceAsync__Q2_2nn2fpFPCQ3_2nn2fp10PreferencePFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(GetRequestBlockSettingAsync, "nn_fp", "GetRequestBlockSettingAsync__Q2_2nn2fpFPUcPCUiUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
 
-				cafeExportRegisterFunc(GetFriendAccountId, "nn_fp", "GetFriendAccountId__Q2_2nn2fpFPA17_cPCUiUi", LogType::NN_FP);
-				cafeExportRegisterFunc(GetFriendScreenName, "nn_fp", "GetFriendScreenName__Q2_2nn2fpFPA11_wPCUiUibPUc", LogType::NN_FP);
-				cafeExportRegisterFunc(GetFriendMii, "nn_fp", "GetFriendMii__Q2_2nn2fpFP12FFLStoreDataPCUiUi", LogType::NN_FP);
-				cafeExportRegisterFunc(GetFriendPresence, "nn_fp", "GetFriendPresence__Q2_2nn2fpFPQ3_2nn2fp14FriendPresencePCUiUi", LogType::NN_FP);
-				cafeExportRegisterFunc(GetFriendRelationship, "nn_fp", "GetFriendRelationship__Q2_2nn2fpFPUcPCUiUi", LogType::NN_FP);
-				cafeExportRegisterFunc(IsJoinable, "nn_fp", "IsJoinable__Q2_2nn2fpFPCQ3_2nn2fp14FriendPresenceUL", LogType::NN_FP);
+			cafeExportRegisterFunc(UpdateGameModeWithUnusedParam, "nn_fp", "UpdateGameMode__Q2_2nn2fpFPCQ3_2nn2fp8GameModePCwUi", LogType::NN_FP);
+			cafeExportRegisterFunc(UpdateGameMode, "nn_fp", "UpdateGameMode__Q2_2nn2fpFPCQ3_2nn2fp8GameModePCw", LogType::NN_FP);
 
-				cafeExportRegisterFunc(CheckSettingStatusAsync, "nn_fp", "CheckSettingStatusAsync__Q2_2nn2fpFPUcPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(IsPreferenceValid, "nn_fp", "IsPreferenceValid__Q2_2nn2fpFv", LogType::NN_FP);
-				cafeExportRegisterFunc(UpdateCommentAsync, "nn_fp", "UpdateCommentAsync__Q2_2nn2fpFPCwPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(UpdatePreferenceAsync, "nn_fp", "UpdatePreferenceAsync__Q2_2nn2fpFPCQ3_2nn2fp10PreferencePFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(GetRequestBlockSettingAsync, "nn_fp", "GetRequestBlockSettingAsync__Q2_2nn2fpFPUcPCUiUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-
-				cafeExportRegisterFunc(UpdateGameModeWithUnusedParam, "nn_fp", "UpdateGameMode__Q2_2nn2fpFPCQ3_2nn2fp8GameModePCwUi", LogType::NN_FP);
-				cafeExportRegisterFunc(UpdateGameMode, "nn_fp", "UpdateGameMode__Q2_2nn2fpFPCQ3_2nn2fp8GameModePCw", LogType::NN_FP);
-
-				cafeExportRegisterFunc(AddFriendAsyncByPid, "nn_fp", "AddFriendAsync__Q2_2nn2fpFUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(AddFriendRequestByPlayRecordAsync, "nn_fp", "AddFriendRequestAsync__Q2_2nn2fpFPCQ3_2nn2fp18RecentPlayRecordExPCwPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(DeleteFriendFlagsAsync, "nn_fp", "DeleteFriendFlagsAsync__Q2_2nn2fpFPCUiUiT2PFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(RemoveFriendAsync, "nn_fp", "RemoveFriendAsync__Q2_2nn2fpFUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(MarkFriendRequestsAsReceivedAsync, "nn_fp", "MarkFriendRequestsAsReceivedAsync__Q2_2nn2fpFPCULUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(CancelFriendRequestAsync, "nn_fp", "CancelFriendRequestAsync__Q2_2nn2fpFULPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(DeleteFriendRequestAsync, "nn_fp", "DeleteFriendRequestAsync__Q2_2nn2fpFULPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-				cafeExportRegisterFunc(AcceptFriendRequestAsync, "nn_fp", "AcceptFriendRequestAsync__Q2_2nn2fpFULPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
-			};
-
-		}s_COSnnFpModule;
-
-		COSModule* GetModule()
-		{
-			return &s_COSnnFpModule;
+			cafeExportRegisterFunc(AddFriendAsyncByPid, "nn_fp", "AddFriendAsync__Q2_2nn2fpFUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(AddFriendRequestByPlayRecordAsync, "nn_fp", "AddFriendRequestAsync__Q2_2nn2fpFPCQ3_2nn2fp18RecentPlayRecordExPCwPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(DeleteFriendFlagsAsync, "nn_fp", "DeleteFriendFlagsAsync__Q2_2nn2fpFPCUiUiT2PFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(RemoveFriendAsync, "nn_fp", "RemoveFriendAsync__Q2_2nn2fpFUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(MarkFriendRequestsAsReceivedAsync, "nn_fp", "MarkFriendRequestsAsReceivedAsync__Q2_2nn2fpFPCULUiPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(CancelFriendRequestAsync, "nn_fp", "CancelFriendRequestAsync__Q2_2nn2fpFULPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(DeleteFriendRequestAsync, "nn_fp", "DeleteFriendRequestAsync__Q2_2nn2fpFULPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
+			cafeExportRegisterFunc(AcceptFriendRequestAsync, "nn_fp", "AcceptFriendRequestAsync__Q2_2nn2fpFULPFQ2_2nn6ResultPv_vPv", LogType::NN_FP);
 		}
-
 	}
 }
+

@@ -1,5 +1,7 @@
-#include "WindowSystem.h"
+#include "gui/guiWrapper.h"
+#include "gui/wxgui.h"
 #include "util/crypto/aes128.h"
+#include "gui/MainWindow.h"
 #include "Cafe/OS/RPL/rpl.h"
 #include "Cafe/OS/libs/gx2/GX2.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
@@ -9,6 +11,7 @@
 #include "config/NetworkSettings.h"
 #include "config/LaunchSettings.h"
 #include "input/InputManager.h"
+#include "gui/CemuApp.h"
 
 #include "Cafe/CafeSystem.h"
 #include "Cafe/TitleList/TitleList.h"
@@ -17,8 +20,10 @@
 #include "Common/ExceptionHandler/ExceptionHandler.h"
 #include "Common/cpu_features.h"
 
+#include <wx/setup.h>
 #include "util/helpers/helpers.h"
 #include "config/ActiveSettings.h"
+#include "Cafe/HW/Latte/Renderer/Vulkan/VsyncDriver.h"
 
 #include "Cafe/IOSU/legacy/iosu_crypto.h"
 #include "Cafe/OS/libs/vpad/vpad.h"
@@ -29,16 +34,13 @@
 #pragma comment(lib,"Dbghelp.lib")
 #endif
 
-#ifdef HAS_SDL
 #define SDL_MAIN_HANDLED
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_main.h>
-#endif
+#include <SDL.h>
 
 #if BOOST_OS_LINUX
 #define _putenv(__s) putenv((char*)(__s))
 #include <sys/sysinfo.h>
-#elif BOOST_OS_MACOS || BOOST_OS_BSD
+#elif BOOST_OS_MACOS
 #define _putenv(__s) putenv((char*)(__s))
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -69,8 +71,7 @@ void _putenvSafe(const char* c)
 
 void reconfigureGLDrivers()
 {
-#ifdef ENABLE_OPENGL
-	// reconfigure GL drivers to store
+	// reconfigure GL drivers to store 
 	const fs::path nvCacheDir = ActiveSettings::GetCachePath("shaderCache/driver/nvidia/");
 
 	std::error_code err;
@@ -86,27 +87,25 @@ void reconfigureGLDrivers()
     _putenvSafe(nvCacheDirEnvOption.c_str());
 #endif
     _putenvSafe("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1");
-#endif
+
 }
 
 void reconfigureVkDrivers()
 {
-#ifdef ENABLE_VULKAN
     _putenvSafe("DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1");
     _putenvSafe("DISABLE_VK_LAYER_VALVE_steam_fossilize_1=1");
-#endif
 }
 
 void WindowsInitCwd()
 {
 	#if BOOST_OS_WINDOWS
 	executablePath.resize(4096);
-	int i = GetModuleFileNameW(NULL, executablePath.data(), executablePath.size());
+	int i = GetModuleFileName(NULL, executablePath.data(), executablePath.size());
 	if(i >= 0)
 		executablePath.resize(i);
 	else
 		executablePath.clear();
-	SetCurrentDirectoryW(fs::path(executablePath).parent_path().c_str());
+	SetCurrentDirectory(executablePath.c_str());
 	// set high priority
 	SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 	#endif
@@ -125,7 +124,7 @@ void CemuCommonInit()
 	WindowsInitCwd();
     ExceptionHandler_Init();
 	// read config
-	GetConfigHandle().Load();
+	g_config.Load();
 	if (NetworkConfig::XMLExists())
 		n_config.Load();
 	// parallelize expensive init code
@@ -172,44 +171,51 @@ void UnitTests()
 bool isConsoleConnected = false;
 void requireConsole()
 {
-    #if BOOST_OS_WINDOWS
-    if (isConsoleConnected)
-        return;
+	#if BOOST_OS_WINDOWS
+	if (isConsoleConnected)
+		return;
 
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD dwFileType = GetFileType(hOut);
-
-    if (dwFileType == FILE_TYPE_UNKNOWN || dwFileType == FILE_TYPE_CHAR)
-    {
-        if (AttachConsole(ATTACH_PARENT_PROCESS) != FALSE)
-        {
-            freopen("CONOUT$", "w", stdout);
-            freopen("CONOUT$", "w", stderr);
-            freopen("CONIN$", "r", stdin);
-            isConsoleConnected = true;
-        }
-    }
-    else
-    {
-        isConsoleConnected = true; 
-    }
-    #endif
+	if (AttachConsole(ATTACH_PARENT_PROCESS) != FALSE)
+	{
+		freopen("CONIN$", "r", stdin);
+		freopen("CONOUT$", "w", stdout);
+		freopen("CONOUT$", "w", stderr);
+		isConsoleConnected = true;
+	}
+	#endif
 }
 
 void HandlePostUpdate()
 {
-	auto exeBackupPath = ActiveSettings::GetExecutablePath();
-	exeBackupPath.replace_extension( _utf8ToPath(_pathToUtf8(exeBackupPath.extension()).append(".backup")));
-	std::error_code ec;
-	if (!fs::exists(exeBackupPath, ec))
-		return;
-	// try to delete update residue, but give up quickly as to not cause a permanent hang
-	// it may succeed on next turn
-	for (sint32 i=0; i<3; i++)
+	// finalize update process
+	// delete update cemu.exe.backup if available
+	const auto filename = ActiveSettings::GetExecutablePath().replace_extension("exe.backup");
+	if (fs::exists(filename))
 	{
-		if (fs::remove(exeBackupPath, ec))
-			break;
-		std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+#if BOOST_OS_WINDOWS
+		HANDLE lock;
+		do
+		{
+			lock = CreateMutex(nullptr, TRUE, L"Global\\cemu_update_lock");
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		} while (lock == nullptr);
+		const DWORD wait_result = WaitForSingleObject(lock, 2000);
+		CloseHandle(lock);
+
+		if (wait_result == WAIT_OBJECT_0)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+			std::error_code ec;
+			fs::remove(filename, ec);
+		}
+#else
+		while (fs::exists(filename))
+		{
+			std::error_code ec;
+			fs::remove(filename, ec);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+		}
+#endif
 	}
 }
 
@@ -218,17 +224,14 @@ void ToolShaderCacheMerger();
 #if BOOST_OS_WINDOWS
 
 // entrypoint for release builds
-int wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nShowCmd)
+int wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPTSTR lpCmdLine, _In_ int nShowCmd)
 {
 	if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE)))
 		cemuLog_log(LogType::Force, "CoInitializeEx() failed");
-#ifdef HAS_SDL
 	SDL_SetMainReady();
-#endif
-	auto parse_rc = LaunchSettings::HandleCommandline(lpCmdLine);
-	if (parse_rc.has_value())
-		return *parse_rc;
-	WindowSystem::Create();
+	if (!LaunchSettings::HandleCommandline(lpCmdLine))
+		return 0;
+	gui_create();
 	return 0;
 }
 
@@ -237,33 +240,23 @@ int main(int argc, char* argv[])
 {
 	if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE)))
 		cemuLog_log(LogType::Force, "CoInitializeEx() failed");
-#ifdef HAS_SDL
 	SDL_SetMainReady();
-#endif
-	auto parse_rc = LaunchSettings::HandleCommandline(argc, argv);
-	if (parse_rc.has_value())
-		return *parse_rc;
-	WindowSystem::Create();
+	if (!LaunchSettings::HandleCommandline(argc, argv))
+		return 0;
+	gui_create();
 	return 0;
 }
 
 #else
 
-int BreathOfTheWildChildProcessMain();
 int main(int argc, char *argv[])
 {
-#if BOOST_OS_LINUX && defined(ENABLE_VULKAN)
-	if (getenv("CEMU_DETECT_RADV") != nullptr)
-		return BreathOfTheWildChildProcessMain();
-#endif
-
-#if BOOST_OS_LINUX || BOOST_OS_BSD
+#if BOOST_OS_LINUX
     XInitThreads();
 #endif
-	auto parse_rc = LaunchSettings::HandleCommandline(argc, argv);
-  if (parse_rc.has_value())
-		return *parse_rc;
-	WindowSystem::Create();
+    if (!LaunchSettings::HandleCommandline(argc, argv))
+		return 0;
+	gui_create();
 	return 0;
 }
 #endif

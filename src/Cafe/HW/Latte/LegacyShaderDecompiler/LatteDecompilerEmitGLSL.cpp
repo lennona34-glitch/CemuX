@@ -18,7 +18,7 @@
 
 #define _CRLF	"\r\n"
 
-void LatteDecompiler_emitAttributeDecodeGLSL(LatteDecompilerShader* shaderContext, StringBuf* src, LatteParsedFetchShaderAttribute* attrib);
+void LatteDecompiler_emitAttributeDecodeGLSL(LatteDecompilerShader* shaderContext, StringBuf* src, LatteParsedFetchShaderAttribute_t* attrib);
 
 /*
  * Variable names:
@@ -1084,7 +1084,7 @@ void _emitALUOP2InstructionCode(LatteDecompilerShaderContext* shaderContext, Lat
 		_emitOperandInputCode(shaderContext, aluInstruction, 0, LATTE_DECOMPILER_DTYPE_FLOAT);
 		src->add(";" _CRLF);
 		src->add("tempResultf = floor(tempResultf);" _CRLF);
-		src->add("tempResultf = (tempResultf >= -256.0 && tempResultf <= 255.0) ? tempResultf : -256.0;" _CRLF);
+		src->add("tempResultf = clamp(tempResultf, -256.0, 255.0);" _CRLF);
 		// set AR
 		if( aluInstruction->destElem == 0 )
 			src->add("ARi.x = int(tempResultf);" _CRLF);
@@ -1109,7 +1109,7 @@ void _emitALUOP2InstructionCode(LatteDecompilerShaderContext* shaderContext, Lat
 		src->add("tempResulti = ");
 		_emitOperandInputCode(shaderContext, aluInstruction, 0, LATTE_DECOMPILER_DTYPE_SIGNED_INT);
 		src->add(";" _CRLF);
-		src->add("tempResulti = (tempResulti >= -256 && tempResulti <= 255) ? tempResulti : -256;" _CRLF);
+		src->add("tempResulti = clamp(tempResulti, -256, 255);" _CRLF);
 		// set AR
 		if( aluInstruction->destElem == 0 )
 			src->add("ARi.x = tempResulti;" _CRLF);
@@ -1186,19 +1186,6 @@ void _emitALUOP2InstructionCode(LatteDecompilerShaderContext* shaderContext, Lat
 		src->add("1.0");
 		src->add(" / ");
 		_emitOperandInputCode(shaderContext, aluInstruction, 0, LATTE_DECOMPILER_DTYPE_FLOAT);
-		_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, outputType);
-		src->add(";" _CRLF);
-	}
-	else if (aluInstruction->opcode == ALU_OP2_INST_RECIP_CLAMPED)
-	{
-		src->add("tempResultf = 1.0 / (");
-		_emitOperandInputCode(shaderContext, aluInstruction, 0, LATTE_DECOMPILER_DTYPE_FLOAT);
-		src->add(");" _CRLF);
-		src->add("if (isinf(tempResultf)) tempResultf = uintBitsToFloat((floatBitsToUint(tempResultf) & 0x80000000u) | 0x7f7fffffu);" _CRLF);
-		_emitInstructionOutputVariableName(shaderContext, aluInstruction);
-		src->add(" = ");
-		_emitTypeConversionPrefix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, outputType);
-		src->add("tempResultf");
 		_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, outputType);
 		src->add(";" _CRLF);
 	}
@@ -1459,9 +1446,18 @@ void _emitALUOP2InstructionCode(LatteDecompilerShaderContext* shaderContext, Lat
 	else if( aluInstruction->opcode == ALU_OP2_INST_LSHL_INT )
 		_emitALUOperationBinary<LATTE_DECOMPILER_DTYPE_SIGNED_INT>(shaderContext, aluInstruction, " << ");
 	else if( aluInstruction->opcode == ALU_OP2_INST_LSHR_INT )
-		_emitALUOperationBinary<LATTE_DECOMPILER_DTYPE_UNSIGNED_INT>(shaderContext, aluInstruction, " >> ");
-	else if( aluInstruction->opcode == ALU_OP2_INST_ASHR_INT )
 		_emitALUOperationBinary<LATTE_DECOMPILER_DTYPE_SIGNED_INT>(shaderContext, aluInstruction, " >> ");
+	else if( aluInstruction->opcode == ALU_OP2_INST_ASHR_INT )
+	{
+		_emitInstructionOutputVariableName(shaderContext, aluInstruction);
+		src->add(" = ");
+		_emitTypeConversionPrefix(shaderContext, LATTE_DECOMPILER_DTYPE_SIGNED_INT, outputType);
+		_emitOperandInputCode(shaderContext, aluInstruction, 0, LATTE_DECOMPILER_DTYPE_SIGNED_INT);
+		src->add(" >> ");
+		_emitOperandInputCode(shaderContext, aluInstruction, 1, LATTE_DECOMPILER_DTYPE_SIGNED_INT);
+		_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_SIGNED_INT, outputType);
+		src->add(";" _CRLF);
+	}
 	else if( aluInstruction->opcode == ALU_OP2_INST_SETGT ||
 		aluInstruction->opcode == ALU_OP2_INST_SETGE ||
 		aluInstruction->opcode == ALU_OP2_INST_SETNE ||
@@ -1589,9 +1585,8 @@ void _emitALUOP2InstructionCode(LatteDecompilerShaderContext* shaderContext, Lat
 		}
 		else if( cfInstruction->type == GPU7_CF_INST_ALU_BREAK )
 		{
-			// defer the break until the ALU clause has finished
-			if (aluInstruction->updateExecuteMask)
-				src->add("aluBreak = aluBreak || (predResult == false);" _CRLF);
+			// leave current loop
+			src->add("if( predResult == false ) break;" _CRLF);
 		}
 		else
 			cemu_assert_debug(false);
@@ -1810,7 +1805,33 @@ void _emitALUReductionInstructionCode(LatteDecompilerShaderContext* shaderContex
 	}
 	else if( aluRedcInstruction[0]->isOP3 == false && (aluRedcInstruction[0]->opcode == ALU_OP2_INST_CUBE) )
 	{
-		// CUBE uses src0.zzxy/src1.yxzz and returns T, S, twice the signed major axis, FaceID.
+		/*
+		 * How the CUBE instruction works (guessed mostly, based on DirectX/OpenGL spec):
+		   Input: vec4, 3d direction vector (can be unnormalized) + w component (which can be ignored, since it only scales the vector but does not affect the direction)
+	
+		   First we figure out the major axis (closest axis-aligned vector). There are six possible vectors:
+		   +rx	0
+		   -rx	1
+		   +ry	2
+		   -ry	3
+		   +rz	4
+		   -rz	5
+		   The major axis vector is calculated by looking at the largest (absolute) 3d vector component and then setting the other components to 0.0
+		   The value that remains in the axis vector is referred to as 'MajorAxis' by the AMD documentation.
+		   The S,T coordinates are taken from the other two components.
+		   Example:	-0.5,0.2,0.4 -> -rx -> -0.5,0.0,0.0 MajorAxis: -0.5, S: 0.2 T: 0.4
+
+		   The CUBE reduction instruction requires a specific mapping for the input vector:
+		   src0 = Rn.zzxy 
+		   src1 = Rn.yxzz
+		   It's probably related to the way the instruction works internally?
+		   If we look at the individual components per ALU unit:
+		   z y	-> Compare y/z
+		   z x  -> Compare x/z
+		   x z  -> Compare x/z
+		   y z  -> Compare y/z
+		*/
+
 		sint32 outputType;
 
 		src->add("redcCUBE(");
@@ -1862,9 +1883,9 @@ void _emitALUReductionInstructionCode(LatteDecompilerShaderContext* shaderContex
 		outputType = _getALUInstructionOutputDataType(shaderContext, aluRedcInstruction[3]);
 		_emitInstructionOutputVariableName(shaderContext, aluRedcInstruction[3]);
 		src->add(" = ");
-		_emitTypeConversionPrefix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, outputType);
-		src->add("float(cubeMapFaceId)");
-		_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, outputType);
+		_emitTypeConversionPrefix(shaderContext, LATTE_DECOMPILER_DTYPE_SIGNED_INT, outputType);
+		src->add("cubeMapFaceId");
+		_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_SIGNED_INT, outputType);
 		src->add(";" _CRLF);
 	}
 	else
@@ -2109,7 +2130,7 @@ void _emitALUClauseCode(LatteDecompilerShaderContext* shaderContext, LatteDecomp
 						continue;
 					_emitInstructionPVPSOutputVariableName(shaderContext, aluRedcInstruction[f]);
 					src->add(" = ");
-					_emitInstructionOutputVariableName(shaderContext, aluRedcInstruction[f]);
+					_emitInstructionOutputVariableName(shaderContext, aluRedcInstruction[0]);
 					src->add(";" _CRLF);
 				}
 			}
@@ -2399,9 +2420,8 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 	else if (texOpcode == GPU7_TEX_INST_SAMPLE_G)
 	{
 		if (hasOffset)
-			src->add("textureGradOffset(");
-		else
-			src->add("textureGrad(");
+			cemu_assert_unimplemented();
+		src->add("textureGrad(");
 	}
 	else
 	{
@@ -2445,11 +2465,8 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 
 			src->addFmt(")*uf_tex{}Scale", texInstruction->textureFetch.textureIndex); // close vec2 and scale
 
-			src->add("), ");
-			if (texOpcode == GPU7_TEX_INST_LD)
-				_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 3, LATTE_DECOMPILER_DTYPE_SIGNED_INT);
-			else
-				src->add("0");
+			src->add("), 0"); // close ivec2 and lod param
+			// todo - lod
 		}
 		else if (texDim == Latte::E_DIM::DIM_1D)
 		{
@@ -2458,11 +2475,8 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 			src->add("float(");
 			_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 0, (texOpcode == GPU7_TEX_INST_LD) ? LATTE_DECOMPILER_DTYPE_SIGNED_INT : LATTE_DECOMPILER_DTYPE_FLOAT);
 			src->addFmt(")*uf_tex{}Scale.x", texInstruction->textureFetch.textureIndex);
-			src->add("), ");
-			if (texOpcode == GPU7_TEX_INST_LD)
-				_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 3, LATTE_DECOMPILER_DTYPE_SIGNED_INT);
-			else
-				src->add("0");
+			src->add("), 0");
+			// todo - lod
 		}
 		else
 			cemu_assert_debug(false);
@@ -2494,9 +2508,7 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 				}
 				src->add("vec4(");
 				src->addFmt("redcCUBEReverse({},", _getTexGPRAccess(shaderContext, texInstruction->srcGpr, LATTE_DECOMPILER_DTYPE_FLOAT, texInstruction->textureFetch.srcSel[0], texInstruction->textureFetch.srcSel[1], -1, -1, tempBuffer0));
-				src->add("int(");
-				_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 2, LATTE_DECOMPILER_DTYPE_FLOAT);
-				src->add(")");
+				_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 2, LATTE_DECOMPILER_DTYPE_SIGNED_INT);
 				src->addFmt(")");
 				src->addFmt(",cubeMapArrayIndex{})", texInstruction->textureFetch.textureIndex); // cubemap index
 			}
@@ -2516,10 +2528,7 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 				{
 					debugBreakpoint();
 				}
-				const uint8 compareSelector = texOpcode == GPU7_TEX_INST_SAMPLE_C_L ?
-					texInstruction->textureFetch.srcSel[2] :
-					texInstruction->textureFetch.srcSel[3];
-				src->addFmt("vec3({}, {})", _getTexGPRAccess(shaderContext, texInstruction->srcGpr, LATTE_DECOMPILER_DTYPE_FLOAT, texInstruction->textureFetch.srcSel[0], texInstruction->textureFetch.srcSel[1], -1, -1, tempBuffer0), _getTexGPRAccess(shaderContext, texInstruction->srcGpr, LATTE_DECOMPILER_DTYPE_FLOAT, compareSelector, -1, -1, -1, tempBuffer1));
+				src->addFmt("vec3({}, {})", _getTexGPRAccess(shaderContext, texInstruction->srcGpr, LATTE_DECOMPILER_DTYPE_FLOAT, texInstruction->textureFetch.srcSel[0], texInstruction->textureFetch.srcSel[1], -1, -1, tempBuffer0), _getTexGPRAccess(shaderContext, texInstruction->srcGpr, LATTE_DECOMPILER_DTYPE_FLOAT, texInstruction->textureFetch.srcSel[3], -1, -1, -1, tempBuffer1));
 			}
 		}
 		else if( texDim == Latte::E_DIM::DIM_3D || texDim == Latte::E_DIM::DIM_2D_ARRAY )
@@ -2540,9 +2549,7 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 			cemu_assert_debug(texInstruction->textureFetch.srcSel[1] < 4);
 			src->add("vec4(");
 			src->addFmt("redcCUBEReverse({},", _getTexGPRAccess(shaderContext, texInstruction->srcGpr, LATTE_DECOMPILER_DTYPE_FLOAT, texInstruction->textureFetch.srcSel[0], texInstruction->textureFetch.srcSel[1], -1, -1, tempBuffer0));
-			src->add("int(");
-			_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 2, LATTE_DECOMPILER_DTYPE_FLOAT);
-			src->add(")");
+			_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 2, LATTE_DECOMPILER_DTYPE_SIGNED_INT);
 			src->add(")");
 			src->addFmt(",cubeMapArrayIndex{})", texInstruction->textureFetch.textureIndex); // cubemap index
 		}
@@ -2564,10 +2571,13 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 				src->addFmt("+ vec2(1.0)/vec2(textureSize({}{}, 0))/512.0", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex);
 		}
 		// lod or lod bias parameter
-		if( texOpcode == GPU7_TEX_INST_SAMPLE_L || texOpcode == GPU7_TEX_INST_SAMPLE_C_L)
+		if( texOpcode == GPU7_TEX_INST_SAMPLE_L || texOpcode == GPU7_TEX_INST_SAMPLE_LB || texOpcode == GPU7_TEX_INST_SAMPLE_C_L)
 		{
 			src->add(",");
-			_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 3, LATTE_DECOMPILER_DTYPE_FLOAT);
+			if(texOpcode == GPU7_TEX_INST_SAMPLE_LB)
+				src->add(_FormatFloatAsGLSLConstant((float)texInstruction->textureFetch.lodBias / 16.0f));
+			else
+				_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 3, LATTE_DECOMPILER_DTYPE_FLOAT);
 		}
 		else if( texOpcode == GPU7_TEX_INST_SAMPLE_LZ || texOpcode == GPU7_TEX_INST_SAMPLE_C_LZ )
 		{
@@ -2577,11 +2587,8 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 	// gradient parameters
 	if (texOpcode == GPU7_TEX_INST_SAMPLE_G)
 	{
-		if (texDim == Latte::E_DIM::DIM_1D)
-		{
-			src->add(",gradH.x,gradV.x");
-		}
-		else if (texDim == Latte::E_DIM::DIM_2D)
+		if (texDim == Latte::E_DIM::DIM_2D ||
+			texDim == Latte::E_DIM::DIM_1D )
 		{
 			src->add(",gradH.xy,gradV.xy");
 		}
@@ -2591,7 +2598,7 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 		}
 	}
 	// offset
-	if( texOpcode == GPU7_TEX_INST_SAMPLE_L || texOpcode == GPU7_TEX_INST_SAMPLE_LB || texOpcode == GPU7_TEX_INST_SAMPLE_G || texOpcode == GPU7_TEX_INST_SAMPLE_LZ || texOpcode == GPU7_TEX_INST_SAMPLE_C_LZ || texOpcode == GPU7_TEX_INST_SAMPLE || texOpcode == GPU7_TEX_INST_SAMPLE_C )
+	if( texOpcode == GPU7_TEX_INST_SAMPLE_L || texOpcode == GPU7_TEX_INST_SAMPLE_LZ || texOpcode == GPU7_TEX_INST_SAMPLE_C_LZ || texOpcode == GPU7_TEX_INST_SAMPLE || texOpcode == GPU7_TEX_INST_SAMPLE_C )
 	{
 		if( hasOffset )
 		{
@@ -2623,11 +2630,6 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 		}
 	}
 	// lod bias
-	if (texOpcode == GPU7_TEX_INST_SAMPLE_LB)
-	{
-		src->add(",");
-		_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 3, LATTE_DECOMPILER_DTYPE_FLOAT);
-	}
 	if( texOpcode == GPU7_TEX_INST_SAMPLE_C || texOpcode == GPU7_TEX_INST_SAMPLE_C_LZ )
 	{
 		src->add(")");
@@ -2708,82 +2710,132 @@ void _emitTEXSampleTextureCode(LatteDecompilerShaderContext* shaderContext, Latt
 void _emitTEXGetTextureResInfoCode(LatteDecompilerShaderContext* shaderContext, LatteDecompilerTEXInstruction* texInstruction)
 {
 	StringBuf* src = shaderContext->shaderSource;
-	const auto texture = fmt::format("{}{}", _getTextureUnitVariablePrefixName(shaderContext->shaderType), texInstruction->textureFetch.textureIndex);
-	const auto dim = shaderContext->shader->textureUnitDim[texInstruction->textureFetch.textureIndex];
-	src->add("{" _CRLF);
-	src->addFmt("int levels = textureQueryLevels({});" _CRLF, texture);
-	src->add("int mip = clamp(");
-	_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, 3, LATTE_DECOMPILER_DTYPE_SIGNED_INT);
-	src->add(", 0, levels - 1);" _CRLF);
-	if (dim == Latte::E_DIM::DIM_1D)
-		src->addFmt("ivec4 info = ivec4(textureSize({}, mip), 0, 0, levels);" _CRLF, texture);
-	else if (dim == Latte::E_DIM::DIM_1D_ARRAY || dim == Latte::E_DIM::DIM_2D || dim == Latte::E_DIM::DIM_2D_MSAA)
-		src->addFmt("ivec4 info = ivec4(textureSize({}, mip), 0, levels);" _CRLF, texture);
-	else if (dim == Latte::E_DIM::DIM_CUBEMAP)
-		src->addFmt("ivec4 info = ivec4(textureSize({}, mip).xy, 0, levels);" _CRLF, texture);
-	else
-		src->addFmt("ivec4 info = ivec4(textureSize({}, mip), levels);" _CRLF, texture);
+	src->addFmt("R{}", texInstruction->dstGpr);
+	src->add("i");
+	src->add(".");
 
-	for (sint32 i = 0; i < 4; ++i)
+	const char* resultElemTable[4] = {"x","y","z","w"};
+	sint32 numWrittenElements = 0;
+	for(sint32 f=0; f<4; f++)
 	{
-		const uint8 selector = texInstruction->dstSel[i];
-		if (selector == 7)
-			continue;
-		src->addFmt("{}.{} = ", _getRegisterVarName(shaderContext, texInstruction->dstGpr), _getElementStrByIndex(i));
-		_emitTypeConversionPrefix(shaderContext, LATTE_DECOMPILER_DTYPE_SIGNED_INT, shaderContext->typeTracker.defaultDataType);
-		if (selector < 4)
-			src->addFmt("info.{}", _getElementStrByIndex(selector));
+		if( texInstruction->dstSel[f] < 4 )
+		{
+			src->add(resultElemTable[f]);
+			numWrittenElements++;
+		}
+		else if( texInstruction->dstSel[f] == 7 )
+		{
+			// masked and not written
+		}
 		else
 		{
-			cemu_assert_debug(selector == 4 || selector == 5);
-			src->add(selector == 5 ? "1" : "0");
+			cemu_assert_unimplemented();
 		}
-		_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_SIGNED_INT, shaderContext->typeTracker.defaultDataType);
-		src->add(";" _CRLF);
 	}
-	src->add("}" _CRLF);
+
+	// todo - mip index parameter?
+
+	auto texDim = shaderContext->shader->textureUnitDim[texInstruction->textureFetch.textureIndex];
+
+	if (texDim == Latte::E_DIM::DIM_1D)
+		src->addFmt(" = ivec4(textureSize({}{}, 0),1,1,1).", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex);
+	else if (texDim == Latte::E_DIM::DIM_1D_ARRAY)
+		src->addFmt(" = ivec4(textureSize({}{}, 0),1,1).", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex);
+	else if (texDim == Latte::E_DIM::DIM_2D || texDim == Latte::E_DIM::DIM_2D_MSAA)
+		src->addFmt(" = ivec4(textureSize({}{}, 0),1,1).", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex);
+	else if (texDim == Latte::E_DIM::DIM_2D_ARRAY)
+		src->addFmt(" = ivec4(textureSize({}{}, 0),1).", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex);
+	else
+	{
+		cemu_assert_debug(false);
+		src->addFmt(" = ivec4(textureSize({}{}, 0),1,1).", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex);
+	}
+
+	for(sint32 f=0; f<4; f++)
+	{
+		if( texInstruction->dstSel[f] < 4 )
+		{
+			src->add(resultElemTable[texInstruction->dstSel[f]]);
+			numWrittenElements++;
+		}
+		else if( texInstruction->dstSel[f] == 7 )
+		{
+			// masked and not written
+		}
+		else
+		{
+			debugBreakpoint();
+		}
+	}
+	src->add(";" _CRLF);
 }
 
 void _emitTEXGetCompTexLodCode(LatteDecompilerShaderContext* shaderContext, LatteDecompilerTEXInstruction* texInstruction)
 {
 	StringBuf* src = shaderContext->shaderSource;
-	const auto texture = fmt::format("{}{}", _getTextureUnitVariablePrefixName(shaderContext->shaderType), texInstruction->textureFetch.textureIndex);
-	const auto dim = shaderContext->shader->textureUnitDim[texInstruction->textureFetch.textureIndex];
-	const sint32 components = (dim == Latte::E_DIM::DIM_1D || dim == Latte::E_DIM::DIM_1D_ARRAY) ? 1 :
-		(dim == Latte::E_DIM::DIM_3D || dim == Latte::E_DIM::DIM_CUBEMAP) ? 3 : 2;
-	src->add("{" _CRLF);
-	src->addFmt("float lod = textureQueryLod({}, ", texture);
-	if (components > 1)
-		src->addFmt("vec{}(", components);
-	for (sint32 i = 0; i < components; ++i)
+	src->add(_getRegisterVarName(shaderContext, texInstruction->dstGpr));
+	src->add(".");
+
+	const char* resultElemTable[4] = {"x","y","z","w"};
+	sint32 numWrittenElements = 0;
+	for(sint32 f=0; f<4; f++)
 	{
-		if (i != 0)
-			src->add(", ");
-		_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, i, LATTE_DECOMPILER_DTYPE_FLOAT);
-	}
-	if (components > 1)
-		src->add(")");
-	src->add(").y;" _CRLF);
-	// x/z: computed lod, y/w: clamped mip level
-	src->addFmt("float level = clamp(floor(lod + 0.5), 0.0, float(textureQueryLevels({}) - 1));" _CRLF, texture);
-	for (sint32 i = 0; i < 4; ++i)
-	{
-		const uint8 selector = texInstruction->dstSel[i];
-		if (selector == 7)
-			continue;
-		src->addFmt("{}.{} = ", _getRegisterVarName(shaderContext, texInstruction->dstGpr), _getElementStrByIndex(i));
-		_emitTypeConversionPrefix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, shaderContext->typeTracker.defaultDataType);
-		if (selector < 4)
-			src->add((selector & 1) ? "level" : "lod");
+		if( texInstruction->dstSel[f] < 4 )
+		{
+			src->add(resultElemTable[f]);
+			numWrittenElements++;
+		}
+		else if( texInstruction->dstSel[f] == 7 )
+		{
+			// masked and not written
+		}
 		else
 		{
-			cemu_assert_debug(selector == 4 || selector == 5);
-			src->add(selector == 5 ? "1.0" : "0.0");
+			debugBreakpoint();
 		}
-		_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, shaderContext->typeTracker.defaultDataType);
-		src->add(";" _CRLF);
 	}
-	src->add("}" _CRLF);
+
+	src->add(" = ");
+	_emitTypeConversionPrefix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, shaderContext->typeTracker.defaultDataType);
+
+	if( shaderContext->shader->textureUnitDim[texInstruction->textureFetch.textureIndex] == Latte::E_DIM::DIM_CUBEMAP )
+	{
+		// 3 coordinates
+		if(shaderContext->typeTracker.defaultDataType == LATTE_DECOMPILER_DTYPE_FLOAT)
+			src->addFmt("vec4(textureQueryLod({}{}, {}.{}{}{}),0.0,0.0)", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex, _getRegisterVarName(shaderContext, texInstruction->srcGpr), resultElemTable[texInstruction->textureFetch.srcSel[0]], resultElemTable[texInstruction->textureFetch.srcSel[1]], resultElemTable[texInstruction->textureFetch.srcSel[2]]);
+		else
+			src->addFmt("vec4(textureQueryLod({}{}, intBitsToFloat({}.{}{}{})),0.0,0.0)", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex, _getRegisterVarName(shaderContext, texInstruction->srcGpr), resultElemTable[texInstruction->textureFetch.srcSel[0]], resultElemTable[texInstruction->textureFetch.srcSel[1]], resultElemTable[texInstruction->textureFetch.srcSel[2]]);
+	}
+	else
+	{
+		if (shaderContext->typeTracker.defaultDataType == LATTE_DECOMPILER_DTYPE_FLOAT)
+			src->addFmt("vec4(textureQueryLod({}{}, {}.{}{}),0.0,0.0)", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex, _getRegisterVarName(shaderContext, texInstruction->srcGpr), resultElemTable[texInstruction->textureFetch.srcSel[0]], resultElemTable[texInstruction->textureFetch.srcSel[1]]);
+		else
+			src->addFmt("vec4(textureQueryLod({}{}, intBitsToFloat({}.{}{})),0.0,0.0)", _getTextureUnitVariablePrefixName(shaderContext->shader->shaderType), texInstruction->textureFetch.textureIndex, _getRegisterVarName(shaderContext, texInstruction->srcGpr), resultElemTable[texInstruction->textureFetch.srcSel[0]], resultElemTable[texInstruction->textureFetch.srcSel[1]]);
+		debugBreakpoint();
+	}
+
+
+	_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, shaderContext->typeTracker.defaultDataType);
+	src->add(".");
+
+	for(sint32 f=0; f<4; f++)
+	{
+		if( texInstruction->dstSel[f] < 4 )
+		{
+			src->add(resultElemTable[texInstruction->dstSel[f]]);
+			numWrittenElements++;
+		}
+		else if( texInstruction->dstSel[f] == 7 )
+		{
+			// masked and not written
+		}
+		else
+		{
+			debugBreakpoint();
+		}
+	}
+	src->add(";" _CRLF);
 }
 
 void _emitTEXSetCubemapIndexCode(LatteDecompilerShaderContext* shaderContext, LatteDecompilerTEXInstruction* texInstruction)
@@ -2803,34 +2855,53 @@ void _emitTEXSetCubemapIndexCode(LatteDecompilerShaderContext* shaderContext, La
 void _emitTEXGetGradientsHV(LatteDecompilerShaderContext* shaderContext, LatteDecompilerTEXInstruction* texInstruction)
 {
 	StringBuf* src = shaderContext->shaderSource;
-	const char* function = texInstruction->opcode == GPU7_TEX_INST_GET_GRADIENTS_H ? "dFdx" : "dFdy";
-	src->add("{" _CRLF);
-	src->addFmt("vec4 gradient = {}(vec4(", function);
-	for (sint32 i = 0; i < 4; ++i)
+	sint32 componentCount = 0;
+	for (sint32 i = 0; i < 4; i++)
 	{
-		if (i != 0)
-			src->add(", ");
-		_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, i, LATTE_DECOMPILER_DTYPE_FLOAT);
-	}
-	src->add("));" _CRLF);
-	for (sint32 i = 0; i < 4; ++i)
-	{
-		const uint8 selector = texInstruction->dstSel[i];
-		if (selector == 7)
+		if(texInstruction->dstSel[i] == 7)
 			continue;
-		src->addFmt("{}.{} = ", _getRegisterVarName(shaderContext, texInstruction->dstGpr), _getElementStrByIndex(i));
-		_emitTypeConversionPrefix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, shaderContext->typeTracker.defaultDataType);
-		if (selector < 4)
-			src->addFmt("gradient.{}", _getElementStrByIndex(selector));
+		componentCount++;
+	}
+	src->add(_getRegisterVarName(shaderContext, texInstruction->dstGpr));
+	src->add(".");
+	const char* resultElemTable[4] = { "x","y","z","w" };
+	sint32 numWrittenElements = 0;
+	for (sint32 f = 0; f < 4; f++)
+	{
+		if (texInstruction->dstSel[f] < 4)
+		{
+			src->add(resultElemTable[f]);
+			numWrittenElements++;
+		}
+		else if (texInstruction->dstSel[f] == 7)
+		{
+			// masked and not written
+		}
 		else
 		{
-			cemu_assert_debug(selector == 4 || selector == 5);
-			src->add(selector == 5 ? "1.0" : "0.0");
+			debugBreakpoint();
 		}
-		_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, shaderContext->typeTracker.defaultDataType);
-		src->add(";" _CRLF);
 	}
-	src->add("}" _CRLF);
+
+	const char* funcName;
+	if (texInstruction->opcode == GPU7_TEX_INST_GET_GRADIENTS_H)
+		funcName = "dFdx";
+	else
+		funcName = "dFdy";
+
+	src->add(" = ");
+
+	_emitTypeConversionPrefix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, shaderContext->typeTracker.defaultDataType);
+
+	src->addFmt("{}(", funcName);
+	_emitRegisterAccessCode(shaderContext, texInstruction->srcGpr, (componentCount >= 1) ? texInstruction->textureFetch.srcSel[0] : -1, (componentCount >= 2) ? texInstruction->textureFetch.srcSel[1] : -1, (componentCount >= 3) ? texInstruction->textureFetch.srcSel[2] : -1, (componentCount >= 4)?texInstruction->textureFetch.srcSel[3]:-1, LATTE_DECOMPILER_DTYPE_FLOAT);
+
+	src->add(")");
+
+	_emitTypeConversionSuffix(shaderContext, LATTE_DECOMPILER_DTYPE_FLOAT, shaderContext->typeTracker.defaultDataType);
+
+	src->add(";" _CRLF);
+
 }
 
 void _emitTEXSetGradientsHV(LatteDecompilerShaderContext* shaderContext, LatteDecompilerTEXInstruction* texInstruction)
@@ -2841,14 +2912,9 @@ void _emitTEXSetGradientsHV(LatteDecompilerShaderContext* shaderContext, LatteDe
 	else
 		src->add("gradV = ");
 
-	src->add("vec4(");
-	for (sint32 component = 0; component < 4; component++)
-	{
-		if (component != 0)
-			src->add(", ");
-		_emitTEXSampleCoordInputComponent(shaderContext, texInstruction, component, LATTE_DECOMPILER_DTYPE_FLOAT);
-	}
-	src->add(");" _CRLF);
+	_emitRegisterAccessCode(shaderContext, texInstruction->srcGpr, texInstruction->textureFetch.srcSel[0], texInstruction->textureFetch.srcSel[1], texInstruction->textureFetch.srcSel[2], texInstruction->textureFetch.srcSel[3], LATTE_DECOMPILER_DTYPE_FLOAT);
+
+	src->add(";" _CRLF);
 }
 
 void _emitGSReadInputVFetchCode(LatteDecompilerShaderContext* shaderContext, LatteDecompilerTEXInstruction* texInstruction)
@@ -3000,19 +3066,19 @@ void _emitTEXReadMemCode(LatteDecompilerShaderContext* shaderContext, LatteDecom
 
 	sint32 readCount;
 
-	if (texInstruction->memRead.format == Latte::E_HWFMT::HWFMT_32_FLOAT)
+	if (texInstruction->memRead.format == FMT_32_FLOAT)
 	{
 		readCount = 1;
 		// todo
 		src->add("0.0");
 	}
-	else if (texInstruction->memRead.format == Latte::E_HWFMT::HWFMT_32_32_FLOAT)
+	else if (texInstruction->memRead.format == FMT_32_32_FLOAT)
 	{
 		readCount = 2;
 		// todo
 		src->add("vec2(0.0,0.0)");
 	}
-	else if (texInstruction->memRead.format == Latte::E_HWFMT::HWFMT_32_32_32_FLOAT)
+	else if (texInstruction->memRead.format == FMT_32_32_32_FLOAT)
 	{
 		readCount = 3;
 		// todo
@@ -3147,7 +3213,7 @@ void _emitExportCode(LatteDecompilerShaderContext* shaderContext, LatteDecompile
 	src->add("// export" _CRLF);
 	if(shaderContext->shaderType == LatteConst::ShaderType::Vertex )
 	{
-		if( cfInstruction->exportBurstCount != 0 && cfInstruction->exportType != 2 )
+		if( cfInstruction->exportBurstCount != 0 )
 			debugBreakpoint();
 		if (cfInstruction->exportType == 1 && cfInstruction->exportArrayBase == GPU7_DECOMPILER_CF_EXPORT_BASE_POSITION)
 		{
@@ -3188,43 +3254,17 @@ void _emitExportCode(LatteDecompilerShaderContext* shaderContext, LatteDecompile
 		else if( cfInstruction->exportType == 2 && cfInstruction->exportArrayBase < 32 )
 		{
 			// export parameter
-			for (uint32 burstIndex = 0; burstIndex < (cfInstruction->exportBurstCount + 1); burstIndex++)
+			sint32 paramIndex = cfInstruction->exportArrayBase;
+			uint32 vsSemanticId = _getVertexShaderOutParamSemanticId(shaderContext->contextRegisters, paramIndex);
+			if (vsSemanticId != 0xFF)
 			{
-				uint32 paramIndex = cfInstruction->exportArrayBase + burstIndex;
-				if (paramIndex >= 32)
-				{
-					cemu_assert_unimplemented();
-					break;
-				}
-				uint32 vsSemanticId = _getVertexShaderOutParamSemanticId(shaderContext->contextRegisters, paramIndex);
-				if (vsSemanticId != 0xFF)
-				{
-					// preserve earlier exports for masked components
-					char componentMask[5]{};
-					uint32 componentCount = 0;
-					for (uint32 component = 0; component < 4; component++)
-					{
-						if (cfInstruction->exportComponentSel[component] != 7)
-						{
-							componentMask[componentCount] = _getElementStrByIndex(component)[0];
-							componentCount++;
-						}
-					}
-					if (componentCount == 0)
-						continue;
-					src->addFmt("passParameterSem{}", vsSemanticId);
-					if (componentCount < 4)
-						src->addFmt(".{}", componentMask);
-					src->add(" = ");
-					_emitExportGPRReadCode(shaderContext, cfInstruction, LATTE_DECOMPILER_DTYPE_FLOAT, burstIndex);
-					if (componentCount < 4)
-						src->addFmt(".{}", componentMask);
-					src->add(";" _CRLF);
-				}
-				else
-				{
-					src->add("// skipped export to semanticId 255" _CRLF);
-				}
+				src->addFmt("passParameterSem{} = ", vsSemanticId);
+				_emitExportGPRReadCode(shaderContext, cfInstruction, LATTE_DECOMPILER_DTYPE_FLOAT, 0);
+				src->add(";" _CRLF);
+			}
+			else
+			{
+				src->add("// skipped export to semanticId 255" _CRLF);
 			}
 		}
 		else
@@ -3535,9 +3575,9 @@ void _emitCFCall(LatteDecompilerShaderContext* shaderContext, LatteDecompilerCFI
 		return;
 	}
 	// init CF stack variables
-	src->addFmt("activeMaskStackSub{:04x}[0] = {};" _CRLF, subroutineInfo->cfAddr, _getActiveMaskCVarName(shaderContext, cfInstruction->activeStackDepth + 1));
-	src->addFmt("activeMaskStackCSub{:04x}[0] = activeMaskStackSub{:04x}[0];" _CRLF, subroutineInfo->cfAddr, subroutineInfo->cfAddr);
-	src->addFmt("activeMaskStackCSub{:04x}[1] = activeMaskStackSub{:04x}[0];" _CRLF, subroutineInfo->cfAddr, subroutineInfo->cfAddr);
+	src->addFmt("activeMaskStackSub{:04x}[0] = true;" _CRLF, subroutineInfo->cfAddr);
+	src->addFmt("activeMaskStackCSub{:04x}[0] = true;" _CRLF, subroutineInfo->cfAddr);
+	src->addFmt("activeMaskStackCSub{:04x}[1] = true;" _CRLF, subroutineInfo->cfAddr);
 
 	shaderContext->isSubroutine = true;
 	shaderContext->subroutineInfo = subroutineInfo;
@@ -3566,11 +3606,7 @@ void LatteDecompiler_emitClauseCode(LatteDecompilerShaderContext* shaderContext,
 			src->addFmt("{} = {};" _CRLF, _getActiveMaskVarName(shaderContext, cfInstruction->activeStackDepth), _getActiveMaskVarName(shaderContext, cfInstruction->activeStackDepth-1));
 			src->addFmt("{} = {};" _CRLF, _getActiveMaskCVarName(shaderContext, cfInstruction->activeStackDepth + 1), _getActiveMaskCVarName(shaderContext, cfInstruction->activeStackDepth));
 		}
-		if (cfInstruction->type == GPU7_CF_INST_ALU_BREAK)
-			src->add("bool aluBreak = false;" _CRLF);
 		_emitALUClauseCode(shaderContext, cfInstruction);
-		if (cfInstruction->type == GPU7_CF_INST_ALU_BREAK)
-			src->add("if (aluBreak) break;" _CRLF);
 		if( shaderContext->analyzer.modifiesPixelActiveState )
 			src->add("}" _CRLF);
 		cemu_assert_debug(!(shaderContext->analyzer.modifiesPixelActiveState == false && cfInstruction->type != GPU7_CF_INST_ALU));
@@ -3635,8 +3671,6 @@ void LatteDecompiler_emitClauseCode(LatteDecompilerShaderContext* shaderContext,
 	{
 		// start of loop
 		// if pixel is disabled, then skip loop
-		src->add("{" _CRLF);
-		src->addFmt("bool loopActive = {};" _CRLF, _getActiveMaskCVarName(shaderContext, cfInstruction->activeStackDepth + 1));
 		if (ActiveSettings::ShaderPreventInfiniteLoopsEnabled())
 		{
 			// with iteration limit to prevent infinite loops
@@ -3656,8 +3690,6 @@ void LatteDecompiler_emitClauseCode(LatteDecompilerShaderContext* shaderContext,
 		// this might not always work
 		if( cfInstruction->popCount != 0 )
 			debugBreakpoint();
-		src->add("}" _CRLF);
-		src->addFmt("{} = loopActive;" _CRLF, _getActiveMaskCVarName(shaderContext, cfInstruction->activeStackDepth + 1));
 		src->add("}" _CRLF);
 	}
 	else if( cfInstruction->type == GPU7_CF_INST_LOOP_BREAK )
@@ -3726,44 +3758,97 @@ void LatteDecompiler_emitGLSLHelperFunctions(LatteDecompilerShaderContext* shade
 {
 	if( shaderContext->analyzer.hasRedcCUBE )
 	{
-		fCStr_shaderSource->add(
-			"void redcCUBE(vec4 src0, vec4 src1, out vec3 stm, out int faceId)\r\n"
-			"{\r\n"
-			"float x = src1.y, y = src1.x, z = src0.x;\r\n"
-			"float ax = abs(x);\r\n"
-			"float ay = abs(y);\r\n"
-			"float az = abs(z);\r\n"
-			"if (az >= ax && az >= ay)\r\n"
-			"{\r\n"
-			"stm = vec3(-y, z < 0.0 ? -x : x, z * 2.0);\r\n"
-			"faceId = z < 0.0 ? 5 : 4;\r\n"
-			"}\r\n"
-			"else if (ay >= ax)\r\n"
-			"{\r\n"
-			"stm = vec3(y < 0.0 ? -z : z, x, y * 2.0);\r\n"
-			"faceId = y < 0.0 ? 3 : 2;\r\n"
-			"}\r\n"
-			"else\r\n"
-			"{\r\n"
-			"stm = vec3(-y, x < 0.0 ? z : -z, x * 2.0);\r\n"
-			"faceId = x < 0.0 ? 1 : 0;\r\n"
-			"}\r\n"
-			"}\r\n");
+		fCStr_shaderSource->add("void redcCUBE(vec4 src0, vec4 src1, out vec3 stm, out int faceId)\r\n"
+		"{\r\n"
+		"// stm -> x .. s, y .. t, z .. MajorAxis*2.0\r\n"
+
+		"vec3 inputCoord = normalize(vec3(src1.y, src1.x, src0.x));\r\n"
+
+		"float rx = inputCoord.x;\r\n"
+		"float ry = inputCoord.y;\r\n"
+		"float rz = inputCoord.z;\r\n"
+		"if( abs(rx) > abs(ry) && abs(rx) > abs(rz) )\r\n"
+		"{\r\n"
+		"stm.z = rx*2.0;\r\n"
+		"stm.xy = vec2(ry,rz);	\r\n"
+		"if( rx >= 0.0 )\r\n"
+		"{\r\n"
+		"faceId = 0;\r\n"
+		"}\r\n"
+		"else\r\n"
+		"{\r\n"
+		"faceId = 1;\r\n"
+		"}\r\n"
+		"}\r\n"
+		"else if( abs(ry) > abs(rx) && abs(ry) > abs(rz) )\r\n"
+		"{\r\n"
+		"stm.z = ry*2.0;\r\n"
+		"stm.xy = vec2(rx,rz);	\r\n"
+		"if( ry >= 0.0 )\r\n"
+		"{\r\n"
+		"faceId = 2;\r\n"
+		"}\r\n"
+		"else\r\n"
+		"{\r\n"
+		"faceId = 3;\r\n"
+		"}\r\n"
+		"}\r\n"
+		"else //if( abs(rz) > abs(ry) && abs(rz) > abs(rx) )\r\n"
+		"{\r\n"
+		"stm.z = rz*2.0;\r\n"
+		"stm.xy = vec2(rx,ry);	\r\n"
+		"if( rz >= 0.0 )\r\n"
+		"{\r\n"
+		"faceId = 4;\r\n"
+		"}\r\n"
+		"else\r\n"
+		"{\r\n"
+		"faceId = 5;\r\n"
+		"}\r\n"
+		"}\r\n"
+		"}\r\n");
 	}
 
 	if( shaderContext->analyzer.hasCubeMapTexture )
 	{
-		fCStr_shaderSource->add(
-			"vec3 redcCUBEReverse(vec2 st, int faceId)\r\n"
-			"{\r\n"
-			"vec2 tc = (st - vec2(1.5)) * 2.0;\r\n"
-			"if (faceId == 0) return vec3(1.0, -tc.y, -tc.x);\r\n"
-			"if (faceId == 1) return vec3(-1.0, -tc.y, tc.x);\r\n"
-			"if (faceId == 2) return vec3(tc.x, 1.0, tc.y);\r\n"
-			"if (faceId == 3) return vec3(tc.x, -1.0, -tc.y);\r\n"
-			"if (faceId == 4) return vec3(tc.x, -tc.y, 1.0);\r\n"
-			"return vec3(-tc.x, -tc.y, -1.0);\r\n"
-			"}\r\n");
+		fCStr_shaderSource->add("vec3 redcCUBEReverse(vec2 st, int faceId)\r\n"
+		"{\r\n"
+		"st.yx = st.xy;\r\n"
+		"vec3 v;\r\n"
+		"float majorAxis = 1.0;\r\n"
+		"if( faceId == 0 )\r\n"
+		"{\r\n"
+		"v.yz = (st-vec2(1.5))*(majorAxis*2.0);\r\n"
+		"v.x = 1.0;\r\n"
+		"}\r\n"
+		"else if( faceId == 1 )\r\n"
+		"{\r\n"
+		"v.yz = (st-vec2(1.5))*(majorAxis*2.0);\r\n"
+		"v.x = -1.0;\r\n"
+		"}\r\n"
+		"else if( faceId == 2 )\r\n"
+		"{\r\n"
+		"v.xz = (st-vec2(1.5))*(majorAxis*2.0);\r\n"
+		"v.y = 1.0;\r\n"
+		"}\r\n"
+		"else if( faceId == 3 )\r\n"
+		"{\r\n"
+		"v.xz = (st-vec2(1.5))*(majorAxis*2.0);\r\n"
+		"v.y = -1.0;\r\n"
+		"}\r\n"
+		"else if( faceId == 4 )\r\n"
+		"{\r\n"
+		"v.xy = (st-vec2(1.5))*(majorAxis*2.0);\r\n"
+		"v.z = 1.0;\r\n"
+		"}\r\n"
+		"else\r\n"
+		"{\r\n"
+		"v.xy = (st-vec2(1.5))*(majorAxis*2.0);\r\n"
+		"v.z = -1.0;\r\n"
+		"}\r\n"
+
+		"return v;\r\n"
+		"}\r\n");
 	}
 
 	// clamp
@@ -3798,7 +3883,7 @@ void LatteDecompiler_emitGLSLHelperFunctions(LatteDecompilerShaderContext* shade
 
 #include "Cafe/HW/Latte/LegacyShaderDecompiler/LatteDecompilerEmitGLSLHeader.hpp"
 
-void LatteDecompiler_emitAttributeImport(LatteDecompilerShaderContext* shaderContext, LatteParsedFetchShaderAttribute& attrib)
+void LatteDecompiler_emitAttributeImport(LatteDecompilerShaderContext* shaderContext, LatteParsedFetchShaderAttribute_t& attrib)
 {
 	auto src = shaderContext->shaderSource;
 

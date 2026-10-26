@@ -643,10 +643,6 @@ uint32 MEMResizeForMBlockExpHeap(MEMHeapHandle heap, void* memBlock, uint32 size
 				newSize = 0;
 		}
 	}
-	else
-	{
-		newSize = dataSize;
-	}
 
 	heap->ReleaseLock();
 
@@ -828,7 +824,7 @@ void _DefaultAllocatorForExpHeap_Free(PPCInterpreter_t* hCPU)
 	osLib_returnFromFunction(hCPU, 0);
 }
 
-CafeStaticVar<MEMAllocatorFunc> gExpHeapDefaultAllocator{coreinit::g_coreinitStaticData};
+SysAllocator<MEMAllocatorFunc> gExpHeapDefaultAllocator;
 
 void MEMInitAllocatorForExpHeap(MEMAllocator* allocator, MEMHeapHandle heap, sint32 alignment)
 {
