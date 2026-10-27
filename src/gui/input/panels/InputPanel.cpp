@@ -120,6 +120,7 @@ void InputPanel::reset_configuration()
 {
 	m_color_backup.clear();
 
+	const wxColour textFg = CemuApp::IsDarkMode() ? wxColour(240, 240, 245) : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
 	wxWindowUpdateLocker lock(this);
 	for (const auto& c : GetChildren())
 	{
@@ -127,6 +128,7 @@ void InputPanel::reset_configuration()
 		{
 			text->SetValue(wxEmptyString);
 			text->SetBackgroundColour(kKeyColourNormalMode);
+			text->SetForegroundColour(textFg);
 			text->Refresh();
 		}
 	}
@@ -136,12 +138,14 @@ void InputPanel::reset_colours()
 {
 	m_color_backup.clear();
 
+	const wxColour textFg = CemuApp::IsDarkMode() ? wxColour(240, 240, 245) : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
 	wxWindowUpdateLocker lock(this);
 	for (const auto& c : GetChildren())
 	{
 		if (auto* text = dynamic_cast<wxTextCtrl*>(c))
 		{
 			text->SetBackgroundColour(kKeyColourNormalMode);
+			text->SetForegroundColour(textFg);
 			text->Refresh();
 		}
 	}
@@ -210,6 +214,8 @@ void InputPanel::set_selected_controller(const EmulatedControllerPtr& emulated_c
 
 void InputPanel::bind_hotkey_events(wxTextCtrl* text_ctrl)
 {
+	if (CemuApp::IsDarkMode())
+		text_ctrl->SetForegroundColour(wxColour(240, 240, 245));
 	text_ctrl->Bind(wxEVT_SET_FOCUS, &InputPanel::on_edit_key_focus, this);
 	text_ctrl->Bind(wxEVT_KILL_FOCUS, &InputPanel::on_edit_key_kill_focus, this);
 	text_ctrl->Bind(wxEVT_RIGHT_DOWN, &InputPanel::on_right_click, this);

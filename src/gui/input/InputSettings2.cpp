@@ -17,6 +17,7 @@
 #include <wx/bmpbuttn.h>
 
 #include "config/ActiveSettings.h"
+#include "gui/CemuApp.h"
 #include "gui/input/InputAPIAddWindow.h"
 #include "input/ControllerFactory.h"
 
@@ -106,7 +107,9 @@ InputSettings2::InputSettings2(wxWindow* parent)
 	Layout();
 	Fit();
 
-    panel->Hide();
+	panel->Hide();
+
+	CemuApp::ApplyThemeToWindow(this);
 
 	update_state();
 
@@ -299,6 +302,8 @@ wxWindow* InputSettings2::initialize_page(size_t index)
 	page->SetSizer(sizer);
 	page->Layout();
 
+	CemuApp::ApplyThemeToWindow(page);
+
 	page->SetClientObject(new wxCustomData(page_data));
 
 	return page;
@@ -415,7 +420,11 @@ void InputSettings2::update_state()
 		for (auto* panel : page_data.m_panels)
 		{
 			if (panel)
+			{
 				panel->load_controller(page_data.m_controller);
+				if (controller)
+					panel->set_selected_controller(emulated_controller, controller);
+			}
 		}
 		return;
 	}
@@ -456,6 +465,8 @@ void InputSettings2::update_state()
 				return;
 			}
 
+			CemuApp::ApplyThemeToWindow(panel);
+
 			page_data.m_panels[type] = panel;
 
 			auto* panel_sizer = sizer->FindItemAtPosition(wxGBPosition(7, 0))->GetSizer();
@@ -464,7 +475,9 @@ void InputSettings2::update_state()
 		}
 
 		panel->load_controller(page_data.m_controller);
-		if (has_controllers)
+		if (controller)
+			panel->set_selected_controller(emulated_controller, controller);
+		else if (has_controllers)
 			panel->set_selected_controller(emulated_controller, emulated_controller->get_controllers()[0]);
 
 		panel->Show();
@@ -708,7 +721,12 @@ void InputSettings2::on_emulated_controller_selected(wxCommandEvent& event)
 	{
 		try
 		{
-			const auto type = EmulatedController::type_from_string(event.GetString().utf8_string());
+			auto type = EmulatedController::type_from_string(event.GetString().utf8_string());
+			if (page_index >= 1 && type == EmulatedController::Type::VPAD)
+			{
+				// Wii U games only read VPAD channel 0 (Controller 1) and require WPAD (Pro/Classic/Wiimote) for Player 2..8
+				type = EmulatedController::Type::Pro;
+			}
 			// same has already been selected
 			if (page_data.m_controller && page_data.m_controller->type() == type)
 				return;
@@ -730,6 +748,23 @@ void InputSettings2::on_emulated_controller_selected(wxCommandEvent& event)
 				}
 			}
 
+			// If still empty, try to auto-detect a matching XInput controller for this player index (e.g. Controller 2 [XInput] for Tab 2)
+			if (new_controller->get_controllers().empty() && InputManager::instance().is_api_available(InputAPI::XInput))
+			{
+				try
+				{
+					auto auto_ctrl = ControllerFactory::CreateController(
+						InputAPI::XInput,
+						fmt::format("{}", page_index),
+						fmt::format("Controller {}", page_index + 1));
+					if (auto_ctrl && auto_ctrl->connect())
+					{
+						new_controller->add_controller(auto_ctrl);
+					}
+				}
+				catch (const std::exception&) {}
+			}
+
 			// set default mappings if any controllers available
 			for(const auto& c: new_controller->get_controllers())
 			{
@@ -744,6 +779,7 @@ void InputSettings2::on_emulated_controller_selected(wxCommandEvent& event)
 	}
 
 	update_state();
+	InputManager::instance().save(page_index);
 }
 
 void InputSettings2::on_emulated_controller_dropdown(wxCommandEvent& event)
@@ -753,6 +789,7 @@ void InputSettings2::on_emulated_controller_dropdown(wxCommandEvent& event)
 
 	wxWindowUpdateLocker lock(emulated_controllers);
 
+	const auto page_index = m_notebook->GetSelection();
 	bool is_gamepad_selected = false;
 	bool is_wpad_selected = false;
 	const auto selected = emulated_controllers->GetSelection();
@@ -768,7 +805,8 @@ void InputSettings2::on_emulated_controller_dropdown(wxCommandEvent& event)
 	emulated_controllers->Clear();
 	emulated_controllers->AppendString(_("Disabled"));
 
-	if (vpad_count < InputManager::kMaxVPADControllers || is_gamepad_selected)
+	// Only Controller 1 (page_index == 0) should offer Wii U GamePad first; Controller 2..8 must use Wii U Pro/Classic/Wiimote in games
+	if (page_index == 0 && (vpad_count < InputManager::kMaxVPADControllers || is_gamepad_selected))
 		emulated_controllers->Append(to_wxString(EmulatedController::type_to_string(EmulatedController::Type::VPAD)));
 
 	if (wpad_count < InputManager::kMaxWPADControllers || is_wpad_selected)
@@ -787,17 +825,39 @@ void InputSettings2::on_controller_selected(wxCommandEvent& event)
 
 	const auto enabled = event.GetSelection() != wxNOT_FOUND;
 	page_data.m_controller_api_remove->Enable(enabled);
-	// page_data->ref().m_controller_list->Clear();
 	if(enabled)
 	{
-		// get selected controller if any todo
 		if (auto* controller = (wxControllerData*)page_data.m_controllers->GetClientObject(event.GetSelection()))
 		{
-			page_data.m_controller_settings->Enable(has_settings(controller->ref()->api()));
+			auto selected_ctrl = controller->ref();
+			page_data.m_controller_settings->Enable(has_settings(selected_ctrl->api()));
 
 			if(page_data.m_controller)
 			{
-				page_data.m_panels[page_data.m_controller->type()]->set_selected_controller(page_data.m_controller, controller->ref());
+				const auto type = page_data.m_controller->type();
+				// Check if any mapping currently belongs to selected_ctrl; if not, rebind this slot to selected_ctrl
+				bool has_mapping_for_selected = false;
+				for (uint64 m = 1; m < page_data.m_controller->get_highest_mapping_id(); ++m)
+				{
+					if (auto mc = page_data.m_controller->get_mapping_controller(m))
+					{
+						if (*mc == *selected_ctrl)
+						{
+							has_mapping_for_selected = true;
+							break;
+						}
+					}
+				}
+				if (!has_mapping_for_selected)
+				{
+					page_data.m_controller->clear_mappings();
+					page_data.m_controller->set_default_mapping(selected_ctrl);
+					if (page_data.m_panels[type])
+						page_data.m_panels[type]->load_controller(page_data.m_controller);
+				}
+
+				if (page_data.m_panels[type])
+					page_data.m_panels[type]->set_selected_controller(page_data.m_controller, selected_ctrl);
 			}
 		}
 		
@@ -845,16 +905,10 @@ void InputSettings2::on_controller_connect(wxCommandEvent& event)
 
 void InputSettings2::on_controller_add(wxCommandEvent& event)
 {
+	const auto page_index = m_notebook->GetSelection();
 	auto& page_data = get_current_page_data();
 
 	std::vector<ControllerPtr> controllers;
-	controllers.reserve(page_data.m_controllers->GetCount());
-	for(uint32 i = 0; i < page_data.m_controllers->GetCount(); ++i)
-	{
-		if (auto* controller = (wxControllerData*)page_data.m_controllers->GetClientObject(i))
-			controllers.emplace_back(controller->ref());
-	}
-
 	InputAPIAddWindow wnd(this, wxGetMousePosition() + wxSize(5, 5), controllers);
 	if (wnd.ShowModal() != wxID_OK)
 		return;
@@ -862,26 +916,30 @@ void InputSettings2::on_controller_add(wxCommandEvent& event)
 	wxASSERT(wnd.is_valid());
 
 	const auto controller = wnd.get_controller();
-
 	const auto api_type = wnd.get_type();
 	controller->connect();
-	const int index = page_data.m_controllers->Append(fmt::format("{} [{}]", controller->display_name(), to_string(api_type)), new wxCustomData(controller));
 
+	// If Emulated controller was still Disabled (or set to VPAD on Controller 2..8), auto-create the appropriate EmulatedController
+	if (!page_data.m_controller || (page_index >= 1 && page_data.m_controller->type() == EmulatedController::Type::VPAD))
+	{
+		const auto default_type = (page_index == 0) ? EmulatedController::Type::VPAD : EmulatedController::Type::Pro;
+		page_data.m_controller = InputManager::instance().set_controller(page_index, default_type);
+	}
+
+	page_data.m_controllers->Clear();
+	const int index = page_data.m_controllers->Append(fmt::format("{} [{}]", controller->display_name(), to_string(api_type)), new wxCustomData(controller));
 	page_data.m_controllers->Select(index);
 	
 	if(page_data.m_controller)
 	{
+		page_data.m_controller->clear_controllers();
+		page_data.m_controller->clear_mappings();
 		page_data.m_controller->add_controller(controller);
-
-		const auto type = page_data.m_controller->type();
-		// if first controller and we got no mappings, add default mappings
-		if(page_data.m_controller->set_default_mapping(controller))
-			page_data.m_panels[type]->load_controller(page_data.m_controller);
-		
-		page_data.m_panels[type]->set_selected_controller(page_data.m_controller, controller);
+		page_data.m_controller->set_default_mapping(controller);
 	}
 
 	update_state();
+	InputManager::instance().save(page_index);
 }
 
 void InputSettings2::on_controller_remove(wxCommandEvent& event)

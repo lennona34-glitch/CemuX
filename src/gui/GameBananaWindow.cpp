@@ -557,21 +557,41 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 
 	sizer->Add(filterRow2, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 2);
 
-	// Splitter window: Left = mod results list (54%), Right = rich mod inspector & installer (46%)
+	// Splitter window: Left = mod results list (58%), Right = rich mod inspector & installer (42%)
 	auto* splitter = new wxSplitterWindow(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE | wxSP_3DSASH);
-	splitter->SetMinimumPaneSize(260);
-	splitter->SetSashGravity(0.54);
+	splitter->SetMinimumPaneSize(280);
+	splitter->SetSashGravity(0.58);
 
 	// Left pane: results list
 	auto* leftPanel = new wxPanel(splitter);
 	auto* leftSizer = new wxBoxSizer(wxVERTICAL);
 	m_list = new wxListCtrl(leftPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
-	m_list->AppendColumn(_("Mod Name"), wxLIST_FORMAT_LEFT, 220);
-	m_list->AppendColumn(_("Game"), wxLIST_FORMAT_LEFT, 125);
-	m_list->AppendColumn(_("Category"), wxLIST_FORMAT_LEFT, 100);
-	m_list->AppendColumn(_("Author"), wxLIST_FORMAT_LEFT, 95);
-	m_list->AppendColumn(_("Likes"), wxLIST_FORMAT_RIGHT, 55);
-	m_list->AppendColumn(_("Views"), wxLIST_FORMAT_RIGHT, 65);
+	m_list->AppendColumn(_("Mod Name"), wxLIST_FORMAT_LEFT, 260);
+	m_list->AppendColumn(_("Game"), wxLIST_FORMAT_LEFT, 145);
+	m_list->AppendColumn(_("Category"), wxLIST_FORMAT_LEFT, 105);
+	m_list->AppendColumn(_("Author"), wxLIST_FORMAT_LEFT, 105);
+	m_list->AppendColumn(_("Likes"), wxLIST_FORMAT_RIGHT, 60);
+	m_list->AppendColumn(_("Views"), wxLIST_FORMAT_RIGHT, 70);
+	m_list->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
+		evt.Skip();
+		if (!m_list || m_list->GetColumnCount() < 6)
+			return;
+		const int availW = m_list->GetClientSize().GetWidth() - 8;
+		if (availW <= 480)
+			return;
+		const int w0 = static_cast<int>(availW * 0.37);
+		const int w1 = static_cast<int>(availW * 0.21);
+		const int w2 = static_cast<int>(availW * 0.14);
+		const int w3 = static_cast<int>(availW * 0.14);
+		const int w4 = std::max(55, static_cast<int>(availW * 0.065));
+		const int w5 = std::max(65, availW - (w0 + w1 + w2 + w3 + w4));
+		m_list->SetColumnWidth(0, w0);
+		m_list->SetColumnWidth(1, w1);
+		m_list->SetColumnWidth(2, w2);
+		m_list->SetColumnWidth(3, w3);
+		m_list->SetColumnWidth(4, w4);
+		m_list->SetColumnWidth(5, w5);
+	});
 	leftSizer->Add(m_list, 1, wxEXPAND | wxALL, 2);
 	leftPanel->SetSizer(leftSizer);
 
@@ -581,9 +601,9 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 
 	auto* previewBox = new wxStaticBoxSizer(wxVERTICAL, rightPanel, _("Mod Preview + Details"));
 
-	m_previewBitmap = new wxStaticBitmap(previewBox->GetStaticBox(), wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize(220, 124));
+	m_previewBitmap = new wxStaticBitmap(previewBox->GetStaticBox(), wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize(320, 180));
 	UpdatePlaceholderBitmap();
-	previewBox->Add(m_previewBitmap, 0, wxALIGN_CENTER_HORIZONTAL | wxALL, 3);
+	previewBox->Add(m_previewBitmap, 0, wxALIGN_CENTER_HORIZONTAL | wxALL, 4);
 
 	m_detailTitle = new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("Select a mod from the list"),
 									 wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
@@ -630,14 +650,19 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 	rightSizer->Add(previewBox, 1, wxEXPAND | wxALL, 2);
 	rightPanel->SetSizer(rightSizer);
 
-	splitter->SplitVertically(leftPanel, rightPanel, 560);
-	splitter->Bind(wxEVT_SIZE, [splitter](wxSizeEvent& evt) {
+	splitter->SplitVertically(leftPanel, rightPanel, 620);
+	auto sashRatio = std::make_shared<double>(0.58);
+	splitter->Bind(wxEVT_SPLITTER_SASH_POS_CHANGED, [splitter, sashRatio](wxSplitterEvent& evt) {
 		const int w = splitter->GetClientSize().GetWidth();
-		if (w >= 540)
+		if (w > 400)
+			*sashRatio = std::clamp(static_cast<double>(evt.GetSashPosition()) / static_cast<double>(w), 0.35, 0.72);
+		evt.Skip();
+	});
+	splitter->Bind(wxEVT_SIZE, [splitter, sashRatio](wxSizeEvent& evt) {
+		const int w = splitter->GetClientSize().GetWidth();
+		if (w >= 560)
 		{
-			const int cur = splitter->GetSashPosition();
-			if (cur < 260 || cur > w - 280)
-				splitter->SetSashPosition(static_cast<int>(w * 0.54));
+			splitter->SetSashPosition(static_cast<int>(w * (*sashRatio)));
 		}
 		evt.Skip();
 	});
@@ -690,6 +715,24 @@ wxPanel* GameBananaWindow::CreateInstalledModsTab(wxWindow* parent)
 	m_installedList->AppendColumn(_("Target Title IDs"), wxLIST_FORMAT_LEFT, 220);
 	m_installedList->AppendColumn(_("Mod Contents"), wxLIST_FORMAT_LEFT, 180);
 	m_installedList->AppendColumn(_("Install Path"), wxLIST_FORMAT_LEFT, 260);
+	m_installedList->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
+		evt.Skip();
+		if (!m_installedList || m_installedList->GetColumnCount() < 5)
+			return;
+		const int availW = m_installedList->GetClientSize().GetWidth() - 8;
+		if (availW <= 500)
+			return;
+		const int w0 = std::max(95, static_cast<int>(availW * 0.11));
+		const int w1 = static_cast<int>(availW * 0.30);
+		const int w2 = static_cast<int>(availW * 0.20);
+		const int w3 = static_cast<int>(availW * 0.15);
+		const int w4 = std::max(140, availW - (w0 + w1 + w2 + w3));
+		m_installedList->SetColumnWidth(0, w0);
+		m_installedList->SetColumnWidth(1, w1);
+		m_installedList->SetColumnWidth(2, w2);
+		m_installedList->SetColumnWidth(3, w3);
+		m_installedList->SetColumnWidth(4, w4);
+	});
 	sizer->Add(m_installedList, 1, wxEXPAND | wxALL, 6);
 
 	auto* btnRow = new wxBoxSizer(wxHORIZONTAL);
@@ -784,18 +827,18 @@ void GameBananaWindow::UpdatePlaceholderBitmap()
 {
 	if (!m_previewBitmap)
 		return;
-	wxBitmap bmp(220, 124);
+	wxBitmap bmp(320, 180);
 	wxMemoryDC dc(bmp);
 	const bool dark = CemuApp::IsDarkMode();
 	dc.SetBackground(wxBrush(dark ? wxColour(38, 38, 44) : wxColour(230, 232, 238)));
 	dc.Clear();
 	dc.SetPen(wxPen(dark ? wxColour(75, 75, 85) : wxColour(190, 195, 205), 1));
 	dc.SetBrush(*wxTRANSPARENT_BRUSH);
-	dc.DrawRectangle(0, 0, 220, 124);
+	dc.DrawRectangle(0, 0, 320, 180);
 	dc.SetTextForeground(dark ? wxColour(180, 185, 195) : wxColour(90, 95, 105));
 	wxString label = _("GameBanana Preview");
 	wxSize ext = dc.GetTextExtent(label);
-	dc.DrawText(label, (220 - ext.GetWidth()) / 2, (124 - ext.GetHeight()) / 2);
+	dc.DrawText(label, (320 - ext.GetWidth()) / 2, (180 - ext.GetHeight()) / 2);
 	dc.SelectObject(wxNullBitmap);
 	m_previewBitmap->SetBitmap(bmp);
 }
@@ -1023,6 +1066,7 @@ void GameBananaWindow::ApplyClientFiltersAndShow()
 	{
 		m_list->SetItemState(0, wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED, wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED);
 	}
+	m_list->SendSizeEvent();
 }
 
 void GameBananaWindow::OnModSelected(wxListEvent& event)
@@ -1183,7 +1227,7 @@ void GameBananaWindow::FetchModDetailsAndThumbnail(size_t visibleIndex)
 				wxImage img;
 				if (img.LoadFile(stream) && img.IsOk())
 				{
-					img.Rescale(220, 124, wxIMAGE_QUALITY_HIGH);
+					img.Rescale(320, 180, wxIMAGE_QUALITY_HIGH);
 					m_previewBitmap->SetBitmap(wxBitmap(img));
 				}
 			}

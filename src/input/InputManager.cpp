@@ -106,7 +106,13 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 		if (!type_node)
 			return false;
 
-		const auto emulate = EmulatedController::type_from_string(type_node.child_value());
+		auto emulate = EmulatedController::type_from_string(type_node.child_value());
+		const bool upgraded_vpad_to_pro = (player_index >= 1 && emulate == EmulatedController::Type::VPAD);
+		if (upgraded_vpad_to_pro)
+		{
+			// Wii U games only read VPAD channel 0 (Controller 1) and require WPAD (Pro/Classic/Wiimote) for Player 2..8
+			emulate = EmulatedController::Type::Pro;
+		}
 		auto emulated_controller = ControllerFactory::CreateEmulatedController(player_index, emulate);
 
 
@@ -114,7 +120,11 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 			emulated_controller->m_profile_name = profile_name_node.child_value();
 
 		// custom settings
-		emulated_controller->load(root);
+		if (!upgraded_vpad_to_pro)
+			emulated_controller->load(root);
+
+		ControllerPtr last_unmapped_controller{};
+		size_t mapped_controller_count = 0;
 
 		for (const auto controller_node : root.select_nodes("controller"))
 		{
@@ -175,6 +185,7 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 				
 
 				// mappings
+				size_t this_ctrl_mappings = 0;
 				if (const auto mappings_node = cnode.child("mappings"))
 				{
 					for (const auto& entry : mappings_node.select_nodes("entry"))
@@ -189,12 +200,29 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 						if (!button_node)
 							continue;
 
-						const auto mapping = ConvertString<uint64>(mapping_node.child_value());
+						auto mapping = ConvertString<uint64>(mapping_node.child_value());
 						const auto button = ConvertString<uint64>(button_node.child_value());
 
+						if (upgraded_vpad_to_pro)
+						{
+							// VPAD ButtonId 11..24 (Up..StickR_Right) correspond to ProController ButtonId 12..25
+							if (mapping >= 11 && mapping <= 24)
+								mapping += 1;
+							else if (mapping == 27) // VPAD Home -> ProController Home (11)
+								mapping = 11;
+							else if (mapping > 24)
+								continue; // Mic/Screen not present on ProController
+						}
+
 						emulated_controller->set_mapping(mapping, controller, button);
+						++this_ctrl_mappings;
 					}
 				}
+
+				if (this_ctrl_mappings == 0)
+					last_unmapped_controller = controller;
+				else
+					++mapped_controller_count;
 			}
 			catch (const std::exception& ex)
 			{
@@ -202,7 +230,31 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 			}
 		}
 
+		// If the user added a second physical joystick (e.g. Controller 2 [XInput]) to this player slot,
+		// but the old profile still had Controller 1 [XInput] holding the mappings while the newly added
+		// joystick had <mappings />, bind this slot cleanly to the newly added joystick.
+		bool repaired_unmapped = false;
+		if (last_unmapped_controller && emulated_controller->get_controllers().size() > 1)
+		{
+			emulated_controller->clear_controllers();
+			emulated_controller->clear_mappings();
+			emulated_controller->add_controller(last_unmapped_controller);
+			emulated_controller->set_default_mapping(last_unmapped_controller);
+			repaired_unmapped = true;
+		}
+		else if (emulated_controller->m_mappings.empty() && !emulated_controller->get_controllers().empty())
+		{
+			emulated_controller->set_default_mapping(emulated_controller->get_controllers().front());
+			repaired_unmapped = true;
+		}
+
 		set_controller(emulated_controller);
+		if (upgraded_vpad_to_pro || repaired_unmapped)
+		{
+			save(player_index);
+			if (!filename.empty())
+				save(player_index, filename);
+		}
 		return true;
 	}
 	catch (const std::exception& ex)

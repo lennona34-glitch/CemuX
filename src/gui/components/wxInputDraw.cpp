@@ -1,5 +1,6 @@
 #include "gui/components/wxInputDraw.h"
 #include "gui/wxHelper.h"
+#include "gui/CemuApp.h"
 
 #include <wx/dcbuffer.h>
 
@@ -20,7 +21,7 @@ void wxInputDraw::OnPaintEvent(wxPaintEvent& event)
 
 void wxInputDraw::OnRender(wxDC& dc)
 {
-	const bool isDark = wxHelper::IsDarkColour(GetBackgroundColour());
+	const bool isDark = CemuApp::IsDarkMode() || wxHelper::IsDarkColour(GetBackgroundColour());
 	dc.SetBackgroundMode(wxSOLID);
 	dc.SetBackground(wxBrush(isDark ? wxColour(35, 35, 38) : *wxWHITE));
 	dc.Clear();
