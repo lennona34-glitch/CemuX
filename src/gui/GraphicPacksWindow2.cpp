@@ -191,7 +191,7 @@ void GraphicPacksWindow2::RefreshGraphicPacks()
 }
 
 GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_filter)
-	: wxDialog(parent, wxID_ANY, _("Graphic packs"), wxDefaultPosition, wxSize(1000,670), wxCLOSE_BOX | wxCLIP_CHILDREN | wxCAPTION | wxRESIZE_BORDER),
+	: wxDialog(parent, wxID_ANY, _("Graphic packs"), wxDefaultPosition, wxSize(1020, 680), wxCLOSE_BOX | wxCLIP_CHILDREN | wxCAPTION | wxRESIZE_BORDER | wxMAXIMIZE_BOX),
 		m_installed_games(CafeTitleList::GetAllTitleIds())
 {
 	if (title_id_filter != 0)
@@ -200,12 +200,10 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 	m_filter_installed_games = !m_installed_games.empty();
 
 	SetIcon(wxICON(X_BOX));
-	SetMinSize(wxSize(500, 400));
+	SetMinSize(wxSize(760, 480));
 	auto main_sizer = new wxBoxSizer(wxVERTICAL);
 
-	m_splitter_window = new wxSplitterWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSP_3D);
-	m_splitter_window->Bind(wxEVT_SIZE, &GraphicPacksWindow2::OnSizeChanged, this);
-	m_splitter_window->Bind(wxEVT_SPLITTER_SASH_POS_CHANGED, &GraphicPacksWindow2::SashPositionChanged, this);
+	m_splitter_window = new wxSplitterWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSP_3D | wxSP_LIVE_UPDATE);
 	
 	// left side
 	auto left_panel = new wxPanel(m_splitter_window);
@@ -237,10 +235,9 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 		m_graphic_pack_tree = new wxCheckTree(left_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTR_DEFAULT_STYLE | wxTR_HIDE_ROOT);
 		m_graphic_pack_tree->Bind(wxEVT_TREE_SEL_CHANGED, &GraphicPacksWindow2::OnTreeSelectionChanged, this);
 		m_graphic_pack_tree->Bind(wxEVT_CHECKTREE_CHOICE, &GraphicPacksWindow2::OnTreeChoiceChanged, this);
-		//m_graphic_pack_tree->SetMinSize(wxSize(600, 400));
 		sizer->Add(m_graphic_pack_tree, 1, wxEXPAND | wxALL, 5);
 
-		left_panel->SetSizerAndFit(sizer);
+		left_panel->SetSizer(sizer);
 	}
 
 	// right side
@@ -314,11 +311,13 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 
 		sizer->Add(row, 0, wxALL | wxEXPAND, 5);
 
-		m_right_panel->SetSizerAndFit(sizer);
+		m_right_panel->SetSizer(sizer);
 	}
 
-	m_splitter_window->SetMinimumPaneSize(50);
-	m_splitter_window->SplitVertically(left_panel, m_right_panel, (sint32)(m_ratio * m_splitter_window->GetParent()->GetSize().GetWidth()));
+	m_splitter_window->SetMinimumPaneSize(260);
+	m_splitter_window->SetSashGravity(0.45);
+	const sint32 initialSash = std::max<sint32>(380, (sint32)(m_ratio * GetClientSize().GetWidth()));
+	m_splitter_window->SplitVertically(left_panel, m_right_panel, initialSash);
 	main_sizer->Add(m_splitter_window, 1, wxEXPAND, 5);
 
 
@@ -328,6 +327,11 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 	main_sizer->Add(m_info_bar, 0, wxALL | wxEXPAND, 5);
 
 	SetSizer(main_sizer);
+	Layout();
+	CentreOnParent();
+	m_splitter_window->SetSashPosition(std::max<sint32>(380, (sint32)(m_ratio * GetClientSize().GetWidth())));
+	m_splitter_window->Bind(wxEVT_SIZE, &GraphicPacksWindow2::OnSizeChanged, this);
+	m_splitter_window->Bind(wxEVT_SPLITTER_SASH_POS_CHANGED, &GraphicPacksWindow2::SashPositionChanged, this);
 
 	UpdateTitleRunning(CafeSystem::IsTitleRunning());
 	FillGraphicPackList();
@@ -649,7 +653,11 @@ void GraphicPacksWindow2::OnSizeChanged(wxSizeEvent& event)
 	wxASSERT(obj);
 
 	const auto width = std::max(obj->GetMinimumPaneSize(), obj->GetParent()->GetClientSize().GetWidth());
-	obj->SetSashPosition((sint32)(m_ratio * width));
+	if (width >= 500)
+	{
+		m_ratio = std::clamp(m_ratio, 0.35f, 0.70f);
+		obj->SetSashPosition((sint32)(m_ratio * width));
+	}
 
 	if (!m_gp_name.empty())
 		m_graphic_pack_name->SetLabel(wxHelper::FromUtf8(m_gp_name));
@@ -669,7 +677,10 @@ void GraphicPacksWindow2::SashPositionChanged(wxEvent& event)
 	wxASSERT(obj);
 
 	const auto width = std::max(obj->GetMinimumPaneSize(), obj->GetParent()->GetClientSize().GetWidth());
-	m_ratio = (float)obj->GetSashPosition() / width;
+	if (width >= 500 && obj->GetSashPosition() >= obj->GetMinimumPaneSize())
+	{
+		m_ratio = std::clamp((float)obj->GetSashPosition() / width, 0.32f, 0.72f);
+	}
 	event.Skip();
 }
 

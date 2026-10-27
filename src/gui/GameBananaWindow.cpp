@@ -447,27 +447,29 @@ namespace
 } // namespace
 
 GameBananaWindow::GameBananaWindow(wxWindow* parent, uint64 initialTitleId)
-	: wxDialog(parent, wxID_ANY, _("GameBanana Mod Manager - 3D Models, Textures, Maps, Gameplay Mods & Cheats"),
-			   wxDefaultPosition, wxSize(1120, 740), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX),
+	: wxDialog(parent, wxID_ANY, _("GameBanana Mod Manager - 3D Models, Textures, Maps, Gameplay Mods + Cheats"),
+			   wxDefaultPosition, wxSize(1160, 760), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX),
 	  m_alive(std::make_shared<std::atomic<bool>>(true)),
 	  m_initialTitleId(initialTitleId)
 {
 	if (!wxImage::FindHandler(wxBITMAP_TYPE_JPEG))
 		wxInitAllImageHandlers();
 
-	SetMinSize(wxSize(900, 600));
+	SetMinSize(wxSize(880, 580));
 	auto* rootSizer = new wxBoxSizer(wxVERTICAL);
 
 	m_notebook = new wxNotebook(this, wxID_ANY);
-	m_notebook->AddPage(CreateBrowseTab(m_notebook), _("Browse & Download Mods (GameBanana)"), true);
-	m_notebook->AddPage(CreateInstalledModsTab(m_notebook), _("Installed Mods & GraphicPacks"), false);
-	m_notebook->AddPage(CreateCheatsTab(m_notebook), _("Cheats & Code Patches Studio"), false);
+	m_notebook->AddPage(CreateBrowseTab(m_notebook), _("Browse + Download Mods (GameBanana)"), true);
+	m_notebook->AddPage(CreateInstalledModsTab(m_notebook), _("Installed Mods + GraphicPacks"), false);
+	m_notebook->AddPage(CreateCheatsTab(m_notebook), _("Cheats + Code Patches Studio"), false);
 
 	rootSizer->Add(m_notebook, 1, wxALL | wxEXPAND, 6);
 
 	// Bottom status bar + global actions
 	auto* bottomSizer = new wxBoxSizer(wxHORIZONTAL);
-	m_status = new wxStaticText(this, wxID_ANY, _("Ready. Browse Wii U community mods from GameBanana or manage installed Cemu GraphicPack mods."));
+	m_status = new wxStaticText(this, wxID_ANY,
+								_("Ready. Browse Wii U community mods from GameBanana or manage installed Cemu GraphicPack mods."),
+								wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
 	bottomSizer->Add(m_status, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
 
 	auto* openModsFolderBtn = new wxButton(this, wxID_ANY, _("Open Mods Folder"));
@@ -503,67 +505,73 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 	auto* panel = new wxPanel(parent);
 	auto* sizer = new wxBoxSizer(wxVERTICAL);
 
-	// Top filter & search bar
+	// Row 1: Game, Category, Sort dropdowns (proportionally sized so they never clip)
 	auto* filterRow1 = new wxBoxSizer(wxHORIZONTAL);
 
 	filterRow1->Add(new wxStaticText(panel, wxID_ANY, _("Game:")), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 4);
 	wxArrayString gameNames;
 	for (const auto& g : kWiiUGames)
 		gameNames.Add(wxString::FromUTF8(g.name));
-	m_gameChoice = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxSize(245, -1), gameNames);
+	m_gameChoice = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, gameNames);
 	int initialGameIdx = FindGameIndexByTitleId(m_initialTitleId);
 	if (initialGameIdx == 0)
 		initialGameIdx = 1; // Default to Breath of the Wild (WiiU) so live mods appear immediately
 	m_gameChoice->SetSelection(initialGameIdx);
-	filterRow1->Add(m_gameChoice, 0, wxALL | wxALIGN_CENTER_VERTICAL, 4);
+	filterRow1->Add(m_gameChoice, 2, wxALL | wxALIGN_CENTER_VERTICAL, 3);
 
 	filterRow1->Add(new wxStaticText(panel, wxID_ANY, _("Category:")), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 4);
 	wxArrayString catNames;
 	for (const auto& c : kCategories)
 		catNames.Add(wxString::FromUTF8(c.label));
-	m_categoryChoice = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxSize(185, -1), catNames);
+	m_categoryChoice = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, catNames);
 	m_categoryChoice->SetSelection(0);
-	filterRow1->Add(m_categoryChoice, 0, wxALL | wxALIGN_CENTER_VERTICAL, 4);
+	filterRow1->Add(m_categoryChoice, 1, wxALL | wxALIGN_CENTER_VERTICAL, 3);
 
 	filterRow1->Add(new wxStaticText(panel, wxID_ANY, _("Sort:")), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 4);
 	wxArrayString sortNames;
 	for (const auto& s : kSortOrders)
 		sortNames.Add(wxString::FromUTF8(s.label));
-	m_sortChoice = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxSize(155, -1), sortNames);
+	m_sortChoice = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, sortNames);
 	m_sortChoice->SetSelection(0);
-	filterRow1->Add(m_sortChoice, 0, wxALL | wxALIGN_CENTER_VERTICAL, 4);
-
-	m_search = new wxSearchCtrl(panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
-	m_search->SetDescriptiveText(_("Search mods, 3D models, textures, skins, maps, cheats (leave empty to browse game)..."));
-	filterRow1->Add(m_search, 1, wxALL | wxEXPAND, 4);
-
-	m_searchBtn = new wxButton(panel, wxID_ANY, _("Search / Browse"));
-	filterRow1->Add(m_searchBtn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 4);
-
-	m_prevPageBtn = new wxButton(panel, wxID_ANY, _("< Prev"), wxDefaultPosition, wxSize(60, -1));
-	m_prevPageBtn->Enable(false);
-	m_pageLabel = new wxStaticText(panel, wxID_ANY, _("Page 1"));
-	m_nextPageBtn = new wxButton(panel, wxID_ANY, _("Next >"), wxDefaultPosition, wxSize(60, -1));
-	filterRow1->Add(m_prevPageBtn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 2);
-	filterRow1->Add(m_pageLabel, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 4);
-	filterRow1->Add(m_nextPageBtn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 2);
+	filterRow1->Add(m_sortChoice, 1, wxALL | wxALIGN_CENTER_VERTICAL, 3);
 
 	sizer->Add(filterRow1, 0, wxEXPAND | wxTOP | wxLEFT | wxRIGHT, 4);
 
-	// Splitter window: Left = mod results list, Right = rich mod inspector & installer
+	// Row 2: Keyword search bar + Search button + Pagination controls
+	auto* filterRow2 = new wxBoxSizer(wxHORIZONTAL);
+	filterRow2->Add(new wxStaticText(panel, wxID_ANY, _("Search:")), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 4);
+	m_search = new wxSearchCtrl(panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
+	m_search->SetDescriptiveText(_("Search mods, 3D models, textures, skins, maps, cheats (leave empty to browse game)..."));
+	filterRow2->Add(m_search, 1, wxALL | wxEXPAND, 3);
+
+	m_searchBtn = new wxButton(panel, wxID_ANY, _("Search / Browse"));
+	filterRow2->Add(m_searchBtn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 3);
+
+	m_prevPageBtn = new wxButton(panel, wxID_ANY, _("< Prev"));
+	m_prevPageBtn->Enable(false);
+	m_pageLabel = new wxStaticText(panel, wxID_ANY, _("Page 1"));
+	m_nextPageBtn = new wxButton(panel, wxID_ANY, _("Next >"));
+	filterRow2->Add(m_prevPageBtn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 2);
+	filterRow2->Add(m_pageLabel, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 6);
+	filterRow2->Add(m_nextPageBtn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 2);
+
+	sizer->Add(filterRow2, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 2);
+
+	// Splitter window: Left = mod results list (54%), Right = rich mod inspector & installer (46%)
 	auto* splitter = new wxSplitterWindow(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE | wxSP_3DSASH);
-	splitter->SetMinimumPaneSize(320);
+	splitter->SetMinimumPaneSize(260);
+	splitter->SetSashGravity(0.54);
 
 	// Left pane: results list
 	auto* leftPanel = new wxPanel(splitter);
 	auto* leftSizer = new wxBoxSizer(wxVERTICAL);
 	m_list = new wxListCtrl(leftPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
-	m_list->AppendColumn(_("Mod Name"), wxLIST_FORMAT_LEFT, 275);
-	m_list->AppendColumn(_("Game"), wxLIST_FORMAT_LEFT, 145);
-	m_list->AppendColumn(_("Category"), wxLIST_FORMAT_LEFT, 115);
-	m_list->AppendColumn(_("Author"), wxLIST_FORMAT_LEFT, 105);
-	m_list->AppendColumn(_("Likes"), wxLIST_FORMAT_RIGHT, 60);
-	m_list->AppendColumn(_("Views"), wxLIST_FORMAT_RIGHT, 70);
+	m_list->AppendColumn(_("Mod Name"), wxLIST_FORMAT_LEFT, 220);
+	m_list->AppendColumn(_("Game"), wxLIST_FORMAT_LEFT, 125);
+	m_list->AppendColumn(_("Category"), wxLIST_FORMAT_LEFT, 100);
+	m_list->AppendColumn(_("Author"), wxLIST_FORMAT_LEFT, 95);
+	m_list->AppendColumn(_("Likes"), wxLIST_FORMAT_RIGHT, 55);
+	m_list->AppendColumn(_("Views"), wxLIST_FORMAT_RIGHT, 65);
 	leftSizer->Add(m_list, 1, wxEXPAND | wxALL, 2);
 	leftPanel->SetSizer(leftSizer);
 
@@ -571,53 +579,68 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 	auto* rightPanel = new wxPanel(splitter);
 	auto* rightSizer = new wxBoxSizer(wxVERTICAL);
 
-	auto* previewBox = new wxStaticBoxSizer(wxVERTICAL, rightPanel, _("Mod Preview & Details"));
+	auto* previewBox = new wxStaticBoxSizer(wxVERTICAL, rightPanel, _("Mod Preview + Details"));
 
-	m_previewBitmap = new wxStaticBitmap(previewBox->GetStaticBox(), wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize(280, 158));
+	m_previewBitmap = new wxStaticBitmap(previewBox->GetStaticBox(), wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize(220, 124));
 	UpdatePlaceholderBitmap();
-	previewBox->Add(m_previewBitmap, 0, wxALIGN_CENTER_HORIZONTAL | wxALL, 4);
+	previewBox->Add(m_previewBitmap, 0, wxALIGN_CENTER_HORIZONTAL | wxALL, 3);
 
-	m_detailTitle = new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("Select a mod from the list"));
+	m_detailTitle = new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("Select a mod from the list"),
+									 wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
 	wxFont titleFont = m_detailTitle->GetFont();
 	titleFont.MakeBold();
 	m_detailTitle->SetFont(titleFont);
 	previewBox->Add(m_detailTitle, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 4);
 
-	m_detailMeta = new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("Author: -  |  Category: -  |  Likes: -  |  Downloads: -"));
-	previewBox->Add(m_detailMeta, 0, wxEXPAND | wxALL, 4);
+	m_detailMeta = new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("Author: -  |  Category: -  |  Likes: -  |  Downloads: -"),
+									wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
+	previewBox->Add(m_detailMeta, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 3);
 
 	m_detailDesc = new wxTextCtrl(previewBox->GetStaticBox(), wxID_ANY,
 								  _("Click any mod on the left to inspect its preview screenshot, full description, and downloadable files.\n\n"
 									"Installing a mod automatically extracts it into Cemu's GraphicPack system (graphicPacks/downloadedMods) "
 									"and generates a rules.txt if needed so 3D models, textures, maps, audio, and code patches work out of the box."),
-								  wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_BESTWRAP);
+								  wxDefaultPosition, wxSize(-1, 110), wxTE_MULTILINE | wxTE_READONLY | wxTE_BESTWRAP);
+	m_detailDesc->SetMinSize(wxSize(-1, 100));
 	previewBox->Add(m_detailDesc, 1, wxEXPAND | wxALL, 4);
 
-	previewBox->Add(new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("Select Downloadable File / Variant:")), 0, wxLEFT | wxRIGHT | wxTOP, 4);
+	auto* fileRow = new wxBoxSizer(wxHORIZONTAL);
+	fileRow->Add(new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("File:")), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 4);
 	m_fileChoice = new wxChoice(previewBox->GetStaticBox(), wxID_ANY);
 	m_fileChoice->Enable(false);
-	previewBox->Add(m_fileChoice, 0, wxEXPAND | wxALL, 4);
+	fileRow->Add(m_fileChoice, 1, wxEXPAND | wxALL, 2);
+	previewBox->Add(fileRow, 0, wxEXPAND | wxLEFT | wxRIGHT, 2);
 
-	m_downloadGauge = new wxGauge(previewBox->GetStaticBox(), wxID_ANY, 100, wxDefaultPosition, wxSize(-1, 16), wxGA_HORIZONTAL | wxGA_SMOOTH);
+	m_downloadGauge = new wxGauge(previewBox->GetStaticBox(), wxID_ANY, 100, wxDefaultPosition, wxSize(-1, 14), wxGA_HORIZONTAL | wxGA_SMOOTH);
 	m_downloadGauge->SetValue(0);
-	previewBox->Add(m_downloadGauge, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4);
+	previewBox->Add(m_downloadGauge, 0, wxEXPAND | wxALL, 4);
 
 	auto* actionRow = new wxBoxSizer(wxHORIZONTAL);
-	m_installModBtn = new wxButton(previewBox->GetStaticBox(), wxID_ANY, _("Download && Install as Mod"));
+	m_installModBtn = new wxButton(previewBox->GetStaticBox(), wxID_ANY, _("Download + Install Mod"));
 	m_installModBtn->Enable(false);
 	m_installModBtn->SetToolTip(_("Downloads the selected file and installs it directly into Cemu's GraphicPack mods folder"));
 
-	m_openWebBtn = new wxButton(previewBox->GetStaticBox(), wxID_ANY, _("Open on GameBanana"));
+	m_openWebBtn = new wxButton(previewBox->GetStaticBox(), wxID_ANY, _("Open Web Page"));
 	m_openWebBtn->Enable(false);
 
-	actionRow->Add(m_installModBtn, 1, wxALL | wxEXPAND, 4);
-	actionRow->Add(m_openWebBtn, 0, wxALL, 4);
+	actionRow->Add(m_installModBtn, 1, wxALL | wxEXPAND, 3);
+	actionRow->Add(m_openWebBtn, 0, wxALL, 3);
 	previewBox->Add(actionRow, 0, wxEXPAND);
 
 	rightSizer->Add(previewBox, 1, wxEXPAND | wxALL, 2);
 	rightPanel->SetSizer(rightSizer);
 
-	splitter->SplitVertically(leftPanel, rightPanel, 670);
+	splitter->SplitVertically(leftPanel, rightPanel, 560);
+	splitter->Bind(wxEVT_SIZE, [splitter](wxSizeEvent& evt) {
+		const int w = splitter->GetClientSize().GetWidth();
+		if (w >= 540)
+		{
+			const int cur = splitter->GetSashPosition();
+			if (cur < 260 || cur > w - 280)
+				splitter->SetSashPosition(static_cast<int>(w * 0.54));
+		}
+		evt.Skip();
+	});
 	sizer->Add(splitter, 1, wxEXPAND | wxALL, 4);
 
 	panel->SetSizer(sizer);
@@ -738,7 +761,7 @@ wxPanel* GameBananaWindow::CreateCheatsTab(wxWindow* parent)
 	sizer->Add(m_cheatCodeCtrl, 1, wxEXPAND | wxALL, 6);
 
 	auto* actionRow = new wxBoxSizer(wxHORIZONTAL);
-	auto* saveActivateBtn = new wxButton(panel, wxID_ANY, _("Save && Activate Cheat Pack"));
+	auto* saveActivateBtn = new wxButton(panel, wxID_ANY, _("Save + Activate Cheat Pack"));
 	saveActivateBtn->Bind(wxEVT_BUTTON, &GameBananaWindow::OnSaveAndActivateCheat, this);
 	actionRow->Add(saveActivateBtn, 0, wxALL, 4);
 
@@ -761,18 +784,18 @@ void GameBananaWindow::UpdatePlaceholderBitmap()
 {
 	if (!m_previewBitmap)
 		return;
-	wxBitmap bmp(280, 158);
+	wxBitmap bmp(220, 124);
 	wxMemoryDC dc(bmp);
 	const bool dark = CemuApp::IsDarkMode();
 	dc.SetBackground(wxBrush(dark ? wxColour(38, 38, 44) : wxColour(230, 232, 238)));
 	dc.Clear();
 	dc.SetPen(wxPen(dark ? wxColour(75, 75, 85) : wxColour(190, 195, 205), 1));
 	dc.SetBrush(*wxTRANSPARENT_BRUSH);
-	dc.DrawRectangle(0, 0, 280, 158);
+	dc.DrawRectangle(0, 0, 220, 124);
 	dc.SetTextForeground(dark ? wxColour(180, 185, 195) : wxColour(90, 95, 105));
 	wxString label = _("GameBanana Preview");
 	wxSize ext = dc.GetTextExtent(label);
-	dc.DrawText(label, (280 - ext.GetWidth()) / 2, (158 - ext.GetHeight()) / 2);
+	dc.DrawText(label, (220 - ext.GetWidth()) / 2, (124 - ext.GetHeight()) / 2);
 	dc.SelectObject(wxNullBitmap);
 	m_previewBitmap->SetBitmap(bmp);
 }
@@ -780,7 +803,7 @@ void GameBananaWindow::UpdatePlaceholderBitmap()
 void GameBananaWindow::SetStatus(const wxString& text)
 {
 	if (m_status)
-		m_status->SetLabel(text);
+		m_status->SetLabelText(text);
 }
 
 bool GameBananaWindow::MatchesSelectedCategory(const Entry& e) const
@@ -991,7 +1014,7 @@ void GameBananaWindow::ApplyClientFiltersAndShow()
 		m_visibleEntries.push_back(e);
 	}
 
-	SetStatus(wxString::Format(_("Showing %zu mods in '%s' (Page %d). Select a mod to inspect files & install."),
+	SetStatus(wxString::Format(_("Showing %zu mods in '%s' (Page %d). Select a mod to inspect files + install."),
 							   m_visibleEntries.size(),
 							   m_categoryChoice->GetStringSelection(),
 							   m_currentPage));
@@ -1011,12 +1034,12 @@ void GameBananaWindow::OnModSelected(wxListEvent& event)
 	m_selectedVisibleIdx = idx;
 	const auto& entry = m_visibleEntries[idx];
 
-	m_detailTitle->SetLabel(wxString::FromUTF8(entry.name));
-	m_detailMeta->SetLabel(wxString::Format(_("Game: %s   |   Category: %s   |   Author: %s   |   Likes: %llu"),
-											wxString::FromUTF8(entry.gameName),
-											wxString::FromUTF8(entry.category),
-											wxString::FromUTF8(entry.author),
-											static_cast<unsigned long long>(entry.likeCount)));
+	m_detailTitle->SetLabelText(wxString::FromUTF8(entry.name));
+	m_detailMeta->SetLabelText(wxString::Format(_("Game: %s  |  Category: %s  |  Author: %s  |  Likes: %llu"),
+												wxString::FromUTF8(entry.gameName),
+												wxString::FromUTF8(entry.category),
+												wxString::FromUTF8(entry.author),
+												static_cast<unsigned long long>(entry.likeCount)));
 	m_openWebBtn->Enable(!entry.url.empty());
 
 	UpdatePlaceholderBitmap();
@@ -1119,12 +1142,12 @@ void GameBananaWindow::FetchModDetailsAndThumbnail(size_t visibleIndex)
 			if (m_selectedVisibleIdx != static_cast<long>(visibleIndex))
 				return;
 
-			m_detailMeta->SetLabel(wxString::Format(_("Game: %s  |  Category: %s  |  Author: %s  |  Likes: %llu  |  Downloads: %llu"),
-													wxString::FromUTF8(updated.gameName),
-													wxString::FromUTF8(updated.category),
-													wxString::FromUTF8(updated.author),
-													static_cast<unsigned long long>(updated.likeCount),
-													static_cast<unsigned long long>(updated.downloadCount)));
+			m_detailMeta->SetLabelText(wxString::Format(_("Game: %s  |  Category: %s  |  Author: %s  |  Likes: %llu  |  Downloads: %llu"),
+														wxString::FromUTF8(updated.gameName),
+														wxString::FromUTF8(updated.category),
+														wxString::FromUTF8(updated.author),
+														static_cast<unsigned long long>(updated.likeCount),
+														static_cast<unsigned long long>(updated.downloadCount)));
 
 			if (!updated.description.empty())
 				m_detailDesc->SetValue(wxString::FromUTF8(updated.description));
@@ -1147,7 +1170,7 @@ void GameBananaWindow::FetchModDetailsAndThumbnail(size_t visibleIndex)
 			}
 			else
 			{
-				m_fileChoice->Append(_("No direct download files listed (use 'Open on GameBanana')"));
+				m_fileChoice->Append(_("No direct download files listed (use 'Open Web Page')"));
 				m_fileChoice->SetSelection(0);
 				m_fileChoice->Enable(false);
 				m_installModBtn->Enable(false);
@@ -1160,7 +1183,7 @@ void GameBananaWindow::FetchModDetailsAndThumbnail(size_t visibleIndex)
 				wxImage img;
 				if (img.LoadFile(stream) && img.IsOk())
 				{
-					img.Rescale(280, 158, wxIMAGE_QUALITY_HIGH);
+					img.Rescale(220, 124, wxIMAGE_QUALITY_HIGH);
 					m_previewBitmap->SetBitmap(wxBitmap(img));
 				}
 			}
