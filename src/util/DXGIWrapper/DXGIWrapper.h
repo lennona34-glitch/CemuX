@@ -1,6 +1,9 @@
 #pragma once
 
+#pragma push_macro("GetHwnd")
+#undef GetHwnd
 #include <dxgi1_4.h>
+#pragma pop_macro("GetHwnd")
 //#include <atlbase.h>
 
 class DXGIWrapper

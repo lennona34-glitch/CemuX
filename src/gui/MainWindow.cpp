@@ -422,7 +422,7 @@ void MainWindow::DestroyGameListAndStatusBar()
 
 wxString MainWindow::GetInitialWindowTitle()
 {
-	return BUILD_VERSION_WITH_NAME_STRING " (CemuX)";
+	return wxString(BUILD_VERSION_WITH_NAME_STRING) + " (CemuX)";
 }
 
 void MainWindow::OnClose(wxCloseEvent& event)

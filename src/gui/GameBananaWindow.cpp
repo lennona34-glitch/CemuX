@@ -1374,7 +1374,7 @@ bool GameBananaWindow::InstallZipAsGraphicPack(const std::vector<uint8>& zipByte
 			continue;
 
 		std::vector<uint8> buf(static_cast<size_t>(sb.size));
-		if (sb.size == 0 || zip_fread(zf, buf.data(), sb.size) == static_cast<zip_ssize_t>(sb.size))
+		if (sb.size == 0 || zip_fread(zf, buf.data(), sb.size) == static_cast<zip_int64_t>(sb.size))
 		{
 			if (std::unique_ptr<FileStream> fsOut{FileStream::createFile2(destPath)})
 			{
@@ -1547,7 +1547,7 @@ void GameBananaWindow::RefreshInstalledMods()
 
 void GameBananaWindow::OnToggleInstalledMod(wxCommandEvent&)
 {
-	const long sel = m_installedList->GetFirstSelected();
+	const long sel = m_installedList->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
 	if (sel < 0 || sel >= static_cast<long>(m_installedMods.size()))
 		return;
 
@@ -1616,7 +1616,7 @@ void GameBananaWindow::OnImportLocalZip(wxCommandEvent&)
 
 void GameBananaWindow::OnOpenSelectedModFolder(wxCommandEvent&)
 {
-	const long sel = m_installedList->GetFirstSelected();
+	const long sel = m_installedList->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
 	if (sel < 0 || sel >= static_cast<long>(m_installedMods.size()))
 		return;
 	wxLaunchDefaultApplication(wxHelper::FromPath(m_installedMods[sel].folderPath));
@@ -1624,7 +1624,7 @@ void GameBananaWindow::OnOpenSelectedModFolder(wxCommandEvent&)
 
 void GameBananaWindow::OnDeleteSelectedMod(wxCommandEvent&)
 {
-	const long sel = m_installedList->GetFirstSelected();
+	const long sel = m_installedList->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
 	if (sel < 0 || sel >= static_cast<long>(m_installedMods.size()))
 		return;
 

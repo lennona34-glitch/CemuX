@@ -59,6 +59,7 @@ public:
 
 	long FindListItemByTitleId(uint64 title_id) const;
 	void OnClose(wxCloseEvent& event);
+	void UpdateItemColors(sint32 startIndex = 0);
 
 private:
 	std::atomic_bool m_exit = false;
@@ -68,7 +69,6 @@ private:
 	inline static const wxColour kUpdateColor{ 0x3939c3 };
 	inline static const wxColour kFavoriteColor{ 0xD3F6FD };
 	inline static const wxColour kSecondColor{ 0xFDF9F2 };
-	void UpdateItemColors(sint32 startIndex = 0);
 
 	enum ItemColumns
 	{
