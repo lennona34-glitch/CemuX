@@ -904,6 +904,12 @@ void MainWindow::OnOptionsInput(wxCommandEvent& event)
 		uint64 titleId = 0;
 		if (CafeSystem::IsTitleRunning())
 			titleId = CafeSystem::GetForegroundTitleId();
+		else if (m_game_list)
+		{
+			const auto sel = m_game_list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+			if (sel != wxNOT_FOUND)
+				titleId = static_cast<uint64>(m_game_list->GetItemData(sel));
+		}
 
 		m_graphic_pack_window = new GraphicPacksWindow2(this, titleId);
 		m_graphic_pack_window->Bind(wxEVT_CLOSE_WINDOW, &MainWindow::OnGraphicWindowClose, this);
@@ -1524,6 +1530,12 @@ void MainWindow::OnToolsInput(wxCommandEvent& event)
 	case MAINFRAME_MENU_ID_TOOLS_GAMEBANANA:
 	{
 		uint64 titleId = CafeSystem::IsTitleRunning() ? CafeSystem::GetForegroundTitleId() : 0;
+		if (titleId == 0 && m_game_list)
+		{
+			const auto sel = m_game_list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+			if (sel != wxNOT_FOUND)
+				titleId = static_cast<uint64>(m_game_list->GetItemData(sel));
+		}
 		GameBananaWindow dialog(this, titleId);
 		dialog.ShowModal();
 		break;

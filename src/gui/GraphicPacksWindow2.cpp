@@ -303,7 +303,34 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 		auto* gamebanana_btn = new wxButton(m_right_panel, wxID_ANY, _("Browse GameBanana Mods..."));
 		gamebanana_btn->Bind(wxEVT_BUTTON, [this, title_id_filter](wxCommandEvent&) {
 			SaveStateToConfig();
-			GameBananaWindow dlg(this, title_id_filter);
+			uint64 targetTitleId = title_id_filter;
+			std::string targetGameName;
+			if (m_shown_graphic_pack && !m_shown_graphic_pack->GetTitleIds().empty())
+			{
+				targetTitleId = m_shown_graphic_pack->GetTitleIds().front();
+			}
+			if (m_graphic_pack_tree)
+			{
+				wxTreeItemId sel = m_graphic_pack_tree->GetSelection();
+				const wxTreeItemId root = m_graphic_pack_tree->GetRootItem();
+				if (sel.IsOk() && sel != root)
+				{
+					// Walk up to the top-level game folder under root
+					wxTreeItemId cur = sel;
+					while (cur.IsOk())
+					{
+						wxTreeItemId parent = m_graphic_pack_tree->GetItemParent(cur);
+						if (!parent.IsOk() || parent == root)
+							break;
+						cur = parent;
+					}
+					if (cur.IsOk() && cur != root)
+					{
+						targetGameName = m_graphic_pack_tree->GetItemText(cur).utf8_string();
+					}
+				}
+			}
+			GameBananaWindow dlg(this, targetTitleId, targetGameName);
 			dlg.ShowModal();
 			FillGraphicPackList();
 		});

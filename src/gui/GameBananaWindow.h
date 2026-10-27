@@ -27,7 +27,7 @@ class wxTextCtrl;
 class GameBananaWindow : public wxDialog
 {
 public:
-	GameBananaWindow(wxWindow* parent, uint64 initialTitleId = 0);
+	GameBananaWindow(wxWindow* parent, uint64 initialTitleId = 0, const std::string& initialGameName = {});
 	~GameBananaWindow() override;
 
 private:
@@ -126,6 +126,7 @@ private:
 
 	std::shared_ptr<std::atomic<bool>> m_alive;
 	uint64 m_initialTitleId = 0;
+	std::string m_initialGameName;
 	bool m_busy = false;
 	int m_currentPage = 1;
 

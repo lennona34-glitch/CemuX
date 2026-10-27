@@ -731,7 +731,7 @@ void wxGameList::OnContextMenuSelected(wxCommandEvent& event)
 			}
 			case kContextMenuGameBananaMods:
 			{
-				GameBananaWindow dialog(GetParent(), title_id);
+				GameBananaWindow dialog(GetParent(), gameInfo.GetBaseTitleId(), gameInfo.GetTitleName());
 				dialog.ShowModal();
 				break;
 			}

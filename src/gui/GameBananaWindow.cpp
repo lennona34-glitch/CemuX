@@ -414,15 +414,48 @@ namespace
 		return baseUrl + "/" + file;
 	}
 
-	int FindGameIndexByTitleId(uint64 titleId)
+	std::string ResolveGameNameForTitleId(uint64 titleId, const std::string& hintName)
 	{
+		if (!hintName.empty())
+			return hintName;
 		if (titleId == 0)
-			return 0;
-		const std::string hexId = fmt::format("{:016x}", titleId);
-		for (size_t i = 1; i < std::size(kWiiUGames); ++i)
+			return {};
+		GameInfo2 info = CafeTitleList::GetGameInfo(titleId);
+		if (!info.IsValid())
+			info = CafeTitleList::GetGameInfo(titleId & ~0x000000FF00000000ULL);
+		if (info.IsValid())
+			return info.GetTitleName();
+		return {};
+	}
+
+	int FindGameIndexByTitleId(uint64 titleId, const std::string& hintName = {})
+	{
+		if (titleId != 0)
 		{
-			if (boost::icontains(kWiiUGames[i].titleIdsCsv, hexId))
-				return static_cast<int>(i);
+			const uint64 baseId = (titleId & ~0x000000FF00000000ULL);
+			const std::string hexFull = fmt::format("{:016x}", baseId);
+			const std::string hexLow  = fmt::format("{:08x}", static_cast<uint32>(titleId & 0xFFFFFFFFULL));
+			for (size_t i = 1; i < std::size(kWiiUGames); ++i)
+			{
+				if (boost::icontains(kWiiUGames[i].titleIdsCsv, hexFull) ||
+					boost::icontains(kWiiUGames[i].titleIdsCsv, hexLow))
+				{
+					return static_cast<int>(i);
+				}
+			}
+		}
+
+		const std::string resolvedName = ResolveGameNameForTitleId(titleId, hintName);
+		if (!resolvedName.empty())
+		{
+			for (size_t i = 1; i < std::size(kWiiUGames); ++i)
+			{
+				if (boost::icontains(kWiiUGames[i].name, resolvedName) ||
+					boost::icontains(resolvedName, kWiiUGames[i].defaultSearch))
+				{
+					return static_cast<int>(i);
+				}
+			}
 		}
 		return 0;
 	}
@@ -446,11 +479,12 @@ namespace
 	}
 } // namespace
 
-GameBananaWindow::GameBananaWindow(wxWindow* parent, uint64 initialTitleId)
+GameBananaWindow::GameBananaWindow(wxWindow* parent, uint64 initialTitleId, const std::string& initialGameName)
 	: wxDialog(parent, wxID_ANY, _("GameBanana Mod Manager - 3D Models, Textures, Maps, Gameplay Mods + Cheats"),
-			   wxDefaultPosition, wxSize(1160, 760), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX),
+			   wxDefaultPosition, wxSize(1240, 780), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX),
 	  m_alive(std::make_shared<std::atomic<bool>>(true)),
-	  m_initialTitleId(initialTitleId)
+	  m_initialTitleId(initialTitleId),
+	  m_initialGameName(ResolveGameNameForTitleId(initialTitleId, initialGameName))
 {
 	if (!wxImage::FindHandler(wxBITMAP_TYPE_JPEG))
 		wxInitAllImageHandlers();
@@ -513,9 +547,9 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 	for (const auto& g : kWiiUGames)
 		gameNames.Add(wxString::FromUTF8(g.name));
 	m_gameChoice = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, gameNames);
-	int initialGameIdx = FindGameIndexByTitleId(m_initialTitleId);
-	if (initialGameIdx == 0)
-		initialGameIdx = 1; // Default to Breath of the Wild (WiiU) so live mods appear immediately
+	int initialGameIdx = FindGameIndexByTitleId(m_initialTitleId, m_initialGameName);
+	if (initialGameIdx == 0 && m_initialTitleId == 0 && m_initialGameName.empty())
+		initialGameIdx = 1; // Only default to Breath of the Wild when opened without any target game
 	m_gameChoice->SetSelection(initialGameIdx);
 	filterRow1->Add(m_gameChoice, 2, wxALL | wxALIGN_CENTER_VERTICAL, 3);
 
@@ -542,6 +576,10 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 	filterRow2->Add(new wxStaticText(panel, wxID_ANY, _("Search:")), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 4);
 	m_search = new wxSearchCtrl(panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
 	m_search->SetDescriptiveText(_("Search mods, 3D models, textures, skins, maps, cheats (leave empty to browse game)..."));
+	if (initialGameIdx == 0 && !m_initialGameName.empty())
+	{
+		m_search->SetValue(wxString::FromUTF8(m_initialGameName));
+	}
 	filterRow2->Add(m_search, 1, wxALL | wxEXPAND, 3);
 
 	m_searchBtn = new wxButton(panel, wxID_ANY, _("Search / Browse"));
@@ -557,27 +595,26 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 
 	sizer->Add(filterRow2, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 2);
 
-	// Splitter window: Left = mod results list (58%), Right = rich mod inspector & installer (42%)
-	auto* splitter = new wxSplitterWindow(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE | wxSP_3DSASH);
-	splitter->SetMinimumPaneSize(280);
-	splitter->SetSashGravity(0.58);
+	// Main 2-column content area: Left = mod results list (54%), Right = rich mod inspector & installer (46%)
+	// Using a proportional wxBoxSizer guarantees the right pane can NEVER be squashed in windowed or fullscreen mode.
+	auto* contentRow = new wxBoxSizer(wxHORIZONTAL);
 
 	// Left pane: results list
-	auto* leftPanel = new wxPanel(splitter);
+	auto* leftPanel = new wxPanel(panel);
 	auto* leftSizer = new wxBoxSizer(wxVERTICAL);
 	m_list = new wxListCtrl(leftPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
-	m_list->AppendColumn(_("Mod Name"), wxLIST_FORMAT_LEFT, 260);
-	m_list->AppendColumn(_("Game"), wxLIST_FORMAT_LEFT, 145);
-	m_list->AppendColumn(_("Category"), wxLIST_FORMAT_LEFT, 105);
-	m_list->AppendColumn(_("Author"), wxLIST_FORMAT_LEFT, 105);
-	m_list->AppendColumn(_("Likes"), wxLIST_FORMAT_RIGHT, 60);
-	m_list->AppendColumn(_("Views"), wxLIST_FORMAT_RIGHT, 70);
+	m_list->AppendColumn(_("Mod Name"), wxLIST_FORMAT_LEFT, 250);
+	m_list->AppendColumn(_("Game"), wxLIST_FORMAT_LEFT, 140);
+	m_list->AppendColumn(_("Category"), wxLIST_FORMAT_LEFT, 100);
+	m_list->AppendColumn(_("Author"), wxLIST_FORMAT_LEFT, 100);
+	m_list->AppendColumn(_("Likes"), wxLIST_FORMAT_RIGHT, 55);
+	m_list->AppendColumn(_("Views"), wxLIST_FORMAT_RIGHT, 65);
 	m_list->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
 		evt.Skip();
 		if (!m_list || m_list->GetColumnCount() < 6)
 			return;
 		const int availW = m_list->GetClientSize().GetWidth() - 8;
-		if (availW <= 480)
+		if (availW <= 420)
 			return;
 		const int w0 = static_cast<int>(availW * 0.37);
 		const int w1 = static_cast<int>(availW * 0.21);
@@ -596,14 +633,15 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 	leftPanel->SetSizer(leftSizer);
 
 	// Right pane: Mod Inspector & 1-Click GraphicPack Installer
-	auto* rightPanel = new wxPanel(splitter);
+	auto* rightPanel = new wxPanel(panel);
+	rightPanel->SetMinSize(wxSize(460, -1));
 	auto* rightSizer = new wxBoxSizer(wxVERTICAL);
 
 	auto* previewBox = new wxStaticBoxSizer(wxVERTICAL, rightPanel, _("Mod Preview + Details"));
 
-	m_previewBitmap = new wxStaticBitmap(previewBox->GetStaticBox(), wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize(320, 180));
+	m_previewBitmap = new wxStaticBitmap(previewBox->GetStaticBox(), wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize(440, 248));
 	UpdatePlaceholderBitmap();
-	previewBox->Add(m_previewBitmap, 0, wxALIGN_CENTER_HORIZONTAL | wxALL, 4);
+	previewBox->Add(m_previewBitmap, 0, wxALIGN_CENTER_HORIZONTAL | wxALL, 6);
 
 	m_detailTitle = new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("Select a mod from the list"),
 									 wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
@@ -650,23 +688,9 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 	rightSizer->Add(previewBox, 1, wxEXPAND | wxALL, 2);
 	rightPanel->SetSizer(rightSizer);
 
-	splitter->SplitVertically(leftPanel, rightPanel, 620);
-	auto sashRatio = std::make_shared<double>(0.58);
-	splitter->Bind(wxEVT_SPLITTER_SASH_POS_CHANGED, [splitter, sashRatio](wxSplitterEvent& evt) {
-		const int w = splitter->GetClientSize().GetWidth();
-		if (w > 400)
-			*sashRatio = std::clamp(static_cast<double>(evt.GetSashPosition()) / static_cast<double>(w), 0.35, 0.72);
-		evt.Skip();
-	});
-	splitter->Bind(wxEVT_SIZE, [splitter, sashRatio](wxSizeEvent& evt) {
-		const int w = splitter->GetClientSize().GetWidth();
-		if (w >= 560)
-		{
-			splitter->SetSashPosition(static_cast<int>(w * (*sashRatio)));
-		}
-		evt.Skip();
-	});
-	sizer->Add(splitter, 1, wxEXPAND | wxALL, 4);
+	contentRow->Add(leftPanel, 54, wxEXPAND | wxRIGHT, 6);
+	contentRow->Add(rightPanel, 46, wxEXPAND);
+	sizer->Add(contentRow, 1, wxEXPAND | wxALL, 4);
 
 	panel->SetSizer(sizer);
 
@@ -776,7 +800,7 @@ wxPanel* GameBananaWindow::CreateCheatsTab(wxWindow* parent)
 	for (size_t i = 1; i < std::size(kWiiUGames); ++i)
 		cheatGames.Add(wxString::FromUTF8(kWiiUGames[i].name));
 	m_cheatGameChoice = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, cheatGames);
-	int initialGameIdx = FindGameIndexByTitleId(m_initialTitleId);
+	int initialGameIdx = FindGameIndexByTitleId(m_initialTitleId, m_initialGameName);
 	m_cheatGameChoice->SetSelection(initialGameIdx > 0 ? initialGameIdx - 1 : 0);
 	formGrid->Add(m_cheatGameChoice, 1, wxEXPAND);
 
@@ -827,18 +851,18 @@ void GameBananaWindow::UpdatePlaceholderBitmap()
 {
 	if (!m_previewBitmap)
 		return;
-	wxBitmap bmp(320, 180);
+	wxBitmap bmp(440, 248);
 	wxMemoryDC dc(bmp);
 	const bool dark = CemuApp::IsDarkMode();
 	dc.SetBackground(wxBrush(dark ? wxColour(38, 38, 44) : wxColour(230, 232, 238)));
 	dc.Clear();
 	dc.SetPen(wxPen(dark ? wxColour(75, 75, 85) : wxColour(190, 195, 205), 1));
 	dc.SetBrush(*wxTRANSPARENT_BRUSH);
-	dc.DrawRectangle(0, 0, 320, 180);
+	dc.DrawRectangle(0, 0, 440, 248);
 	dc.SetTextForeground(dark ? wxColour(180, 185, 195) : wxColour(90, 95, 105));
 	wxString label = _("GameBanana Preview");
 	wxSize ext = dc.GetTextExtent(label);
-	dc.DrawText(label, (320 - ext.GetWidth()) / 2, (180 - ext.GetHeight()) / 2);
+	dc.DrawText(label, (440 - ext.GetWidth()) / 2, (248 - ext.GetHeight()) / 2);
 	dc.SelectObject(wxNullBitmap);
 	m_previewBitmap->SetBitmap(bmp);
 }
@@ -1227,7 +1251,7 @@ void GameBananaWindow::FetchModDetailsAndThumbnail(size_t visibleIndex)
 				wxImage img;
 				if (img.LoadFile(stream) && img.IsOk())
 				{
-					img.Rescale(320, 180, wxIMAGE_QUALITY_HIGH);
+					img.Rescale(440, 248, wxIMAGE_QUALITY_HIGH);
 					m_previewBitmap->SetBitmap(wxBitmap(img));
 				}
 			}
