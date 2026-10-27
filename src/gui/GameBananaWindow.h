@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <wx/dialog.h>
+#include <wx/image.h>
 
 class wxButton;
 class wxChoice;
@@ -94,6 +95,8 @@ private:
 	void ApplyClientFiltersAndShow();
 	void FetchModDetailsAndThumbnail(size_t visibleIndex);
 	void UpdatePlaceholderBitmap();
+	void RenderPreviewBitmap();
+	void UpdateResponsiveLayout();
 
 	// Zip extraction & GraphicPack auto-packaging
 	bool InstallZipAsGraphicPack(const std::vector<uint8>& zipBytes,
@@ -145,6 +148,10 @@ private:
 	wxListCtrl* m_list = nullptr;
 
 	wxStaticBitmap* m_previewBitmap = nullptr;
+	wxImage m_currentPreviewImage;
+	wxSize m_previewTargetSize{320, 180};
+	wxSize m_lastDialogSize{0, 0};
+	bool m_updatingLayout = false;
 	wxStaticText* m_detailTitle = nullptr;
 	wxStaticText* m_detailMeta = nullptr;
 	wxTextCtrl* m_detailDesc = nullptr;

@@ -12,12 +12,14 @@
 #include <boost/algorithm/string.hpp>
 
 #include <wx/dcmemory.h>
+#include <wx/display.h>
 #include <wx/filedlg.h>
 #include <wx/gauge.h>
 #include <wx/image.h>
 #include <wx/listctrl.h>
 #include <wx/mstream.h>
 #include <wx/notebook.h>
+#include <wx/settings.h>
 #include <wx/splitter.h>
 #include <wx/srchctrl.h>
 #include <wx/statbmp.h>
@@ -481,7 +483,7 @@ namespace
 
 GameBananaWindow::GameBananaWindow(wxWindow* parent, uint64 initialTitleId, const std::string& initialGameName)
 	: wxDialog(parent, wxID_ANY, _("GameBanana Mod Manager - 3D Models, Textures, Maps, Gameplay Mods + Cheats"),
-			   wxDefaultPosition, wxSize(1240, 780), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX),
+			   wxDefaultPosition, wxSize(1060, 660), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX),
 	  m_alive(std::make_shared<std::atomic<bool>>(true)),
 	  m_initialTitleId(initialTitleId),
 	  m_initialGameName(ResolveGameNameForTitleId(initialTitleId, initialGameName))
@@ -489,7 +491,20 @@ GameBananaWindow::GameBananaWindow(wxWindow* parent, uint64 initialTitleId, cons
 	if (!wxImage::FindHandler(wxBITMAP_TYPE_JPEG))
 		wxInitAllImageHandlers();
 
-	SetMinSize(wxSize(880, 580));
+	SetMinSize(wxSize(820, 520));
+
+	// Fit initial dialog size comfortably within the active display's client work area
+	int dispIdx = parent ? wxDisplay::GetFromWindow(parent) : 0;
+	if (dispIdx == wxNOT_FOUND)
+		dispIdx = 0;
+	const wxRect workArea = wxDisplay(dispIdx).GetClientArea();
+	if (workArea.GetWidth() > 0 && workArea.GetHeight() > 0)
+	{
+		const int initW = std::clamp(static_cast<int>(workArea.GetWidth() * 0.88), 860, 1200);
+		const int initH = std::clamp(static_cast<int>(workArea.GetHeight() * 0.88), 540, 760);
+		SetSize(wxSize(initW, initH));
+	}
+
 	auto* rootSizer = new wxBoxSizer(wxVERTICAL);
 
 	m_notebook = new wxNotebook(this, wxID_ANY);
@@ -522,6 +537,34 @@ GameBananaWindow::GameBananaWindow(wxWindow* parent, uint64 initialTitleId, cons
 
 	// Apply active Cemu theme (Dark / Light)
 	CemuApp::ApplyThemeToWindow(this);
+
+	// Bind dialog-level resize handler (prevents SysListView32 scrollbar WM_SIZE feedback loops)
+	Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
+		evt.Skip();
+		const wxSize curSize = GetClientSize();
+		if (std::abs(curSize.GetWidth() - m_lastDialogSize.GetWidth()) >= 4 ||
+			std::abs(curSize.GetHeight() - m_lastDialogSize.GetHeight()) >= 4)
+		{
+			m_lastDialogSize = curSize;
+			auto alive = m_alive;
+			wxTheApp->CallAfter([this, alive]() {
+				if (!*alive)
+					return;
+				UpdateResponsiveLayout();
+			});
+		}
+	});
+	m_notebook->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED, [this](wxBookCtrlEvent& evt) {
+		evt.Skip();
+		auto alive = m_alive;
+		wxTheApp->CallAfter([this, alive]() {
+			if (!*alive)
+				return;
+			UpdateResponsiveLayout();
+		});
+	});
+
+	UpdateResponsiveLayout();
 
 	// Populate initial state and kick off initial live browse
 	RefreshInstalledMods();
@@ -603,64 +646,45 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 	auto* leftPanel = new wxPanel(panel);
 	auto* leftSizer = new wxBoxSizer(wxVERTICAL);
 	m_list = new wxListCtrl(leftPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
-	m_list->AppendColumn(_("Mod Name"), wxLIST_FORMAT_LEFT, 250);
-	m_list->AppendColumn(_("Game"), wxLIST_FORMAT_LEFT, 140);
-	m_list->AppendColumn(_("Category"), wxLIST_FORMAT_LEFT, 100);
-	m_list->AppendColumn(_("Author"), wxLIST_FORMAT_LEFT, 100);
-	m_list->AppendColumn(_("Likes"), wxLIST_FORMAT_RIGHT, 55);
-	m_list->AppendColumn(_("Views"), wxLIST_FORMAT_RIGHT, 65);
-	m_list->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
-		evt.Skip();
-		if (!m_list || m_list->GetColumnCount() < 6)
-			return;
-		const int availW = m_list->GetClientSize().GetWidth() - 8;
-		if (availW <= 420)
-			return;
-		const int w0 = static_cast<int>(availW * 0.37);
-		const int w1 = static_cast<int>(availW * 0.21);
-		const int w2 = static_cast<int>(availW * 0.14);
-		const int w3 = static_cast<int>(availW * 0.14);
-		const int w4 = std::max(55, static_cast<int>(availW * 0.065));
-		const int w5 = std::max(65, availW - (w0 + w1 + w2 + w3 + w4));
-		m_list->SetColumnWidth(0, w0);
-		m_list->SetColumnWidth(1, w1);
-		m_list->SetColumnWidth(2, w2);
-		m_list->SetColumnWidth(3, w3);
-		m_list->SetColumnWidth(4, w4);
-		m_list->SetColumnWidth(5, w5);
-	});
+	m_list->AppendColumn(_("Mod Name"), wxLIST_FORMAT_LEFT, 220);
+	m_list->AppendColumn(_("Game"), wxLIST_FORMAT_LEFT, 125);
+	m_list->AppendColumn(_("Category"), wxLIST_FORMAT_LEFT, 90);
+	m_list->AppendColumn(_("Author"), wxLIST_FORMAT_LEFT, 90);
+	m_list->AppendColumn(_("Likes"), wxLIST_FORMAT_RIGHT, 52);
+	m_list->AppendColumn(_("Views"), wxLIST_FORMAT_RIGHT, 62);
 	leftSizer->Add(m_list, 1, wxEXPAND | wxALL, 2);
 	leftPanel->SetSizer(leftSizer);
 
 	// Right pane: Mod Inspector & 1-Click GraphicPack Installer
 	auto* rightPanel = new wxPanel(panel);
-	rightPanel->SetMinSize(wxSize(460, -1));
+	rightPanel->SetMinSize(wxSize(350, -1));
 	auto* rightSizer = new wxBoxSizer(wxVERTICAL);
 
 	auto* previewBox = new wxStaticBoxSizer(wxVERTICAL, rightPanel, _("Mod Preview + Details"));
 
-	m_previewBitmap = new wxStaticBitmap(previewBox->GetStaticBox(), wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize(440, 248));
+	m_previewBitmap = new wxStaticBitmap(previewBox->GetStaticBox(), wxID_ANY, wxNullBitmap, wxDefaultPosition, m_previewTargetSize);
+	m_previewBitmap->SetMinSize(m_previewTargetSize);
 	UpdatePlaceholderBitmap();
-	previewBox->Add(m_previewBitmap, 0, wxALIGN_CENTER_HORIZONTAL | wxALL, 6);
+	previewBox->Add(m_previewBitmap, 0, wxALIGN_CENTER_HORIZONTAL | wxALL, 4);
 
 	m_detailTitle = new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("Select a mod from the list"),
 									 wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
 	wxFont titleFont = m_detailTitle->GetFont();
 	titleFont.MakeBold();
 	m_detailTitle->SetFont(titleFont);
-	previewBox->Add(m_detailTitle, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 4);
+	previewBox->Add(m_detailTitle, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 3);
 
 	m_detailMeta = new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("Author: -  |  Category: -  |  Likes: -  |  Downloads: -"),
 									wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
-	previewBox->Add(m_detailMeta, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 3);
+	previewBox->Add(m_detailMeta, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 2);
 
 	m_detailDesc = new wxTextCtrl(previewBox->GetStaticBox(), wxID_ANY,
 								  _("Click any mod on the left to inspect its preview screenshot, full description, and downloadable files.\n\n"
 									"Installing a mod automatically extracts it into Cemu's GraphicPack system (graphicPacks/downloadedMods) "
 									"and generates a rules.txt if needed so 3D models, textures, maps, audio, and code patches work out of the box."),
-								  wxDefaultPosition, wxSize(-1, 110), wxTE_MULTILINE | wxTE_READONLY | wxTE_BESTWRAP);
-	m_detailDesc->SetMinSize(wxSize(-1, 100));
-	previewBox->Add(m_detailDesc, 1, wxEXPAND | wxALL, 4);
+								  wxDefaultPosition, wxSize(-1, 80), wxTE_MULTILINE | wxTE_READONLY | wxTE_BESTWRAP);
+	m_detailDesc->SetMinSize(wxSize(-1, 64));
+	previewBox->Add(m_detailDesc, 1, wxEXPAND | wxALL, 3);
 
 	auto* fileRow = new wxBoxSizer(wxHORIZONTAL);
 	fileRow->Add(new wxStaticText(previewBox->GetStaticBox(), wxID_ANY, _("File:")), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 4);
@@ -671,25 +695,27 @@ wxPanel* GameBananaWindow::CreateBrowseTab(wxWindow* parent)
 
 	m_downloadGauge = new wxGauge(previewBox->GetStaticBox(), wxID_ANY, 100, wxDefaultPosition, wxSize(-1, 14), wxGA_HORIZONTAL | wxGA_SMOOTH);
 	m_downloadGauge->SetValue(0);
-	previewBox->Add(m_downloadGauge, 0, wxEXPAND | wxALL, 4);
+	previewBox->Add(m_downloadGauge, 0, wxEXPAND | wxALL, 3);
 
 	auto* actionRow = new wxBoxSizer(wxHORIZONTAL);
 	m_installModBtn = new wxButton(previewBox->GetStaticBox(), wxID_ANY, _("Download + Install Mod"));
+	m_installModBtn->SetMinSize(wxSize(-1, 30));
 	m_installModBtn->Enable(false);
 	m_installModBtn->SetToolTip(_("Downloads the selected file and installs it directly into Cemu's GraphicPack mods folder"));
 
 	m_openWebBtn = new wxButton(previewBox->GetStaticBox(), wxID_ANY, _("Open Web Page"));
+	m_openWebBtn->SetMinSize(wxSize(-1, 30));
 	m_openWebBtn->Enable(false);
 
 	actionRow->Add(m_installModBtn, 1, wxALL | wxEXPAND, 3);
-	actionRow->Add(m_openWebBtn, 0, wxALL, 3);
+	actionRow->Add(m_openWebBtn, 0, wxALL | wxEXPAND, 3);
 	previewBox->Add(actionRow, 0, wxEXPAND);
 
 	rightSizer->Add(previewBox, 1, wxEXPAND | wxALL, 2);
 	rightPanel->SetSizer(rightSizer);
 
-	contentRow->Add(leftPanel, 54, wxEXPAND | wxRIGHT, 6);
-	contentRow->Add(rightPanel, 46, wxEXPAND);
+	contentRow->Add(leftPanel, 56, wxEXPAND | wxRIGHT, 6);
+	contentRow->Add(rightPanel, 44, wxEXPAND);
 	sizer->Add(contentRow, 1, wxEXPAND | wxALL, 4);
 
 	panel->SetSizer(sizer);
@@ -739,24 +765,6 @@ wxPanel* GameBananaWindow::CreateInstalledModsTab(wxWindow* parent)
 	m_installedList->AppendColumn(_("Target Title IDs"), wxLIST_FORMAT_LEFT, 220);
 	m_installedList->AppendColumn(_("Mod Contents"), wxLIST_FORMAT_LEFT, 180);
 	m_installedList->AppendColumn(_("Install Path"), wxLIST_FORMAT_LEFT, 260);
-	m_installedList->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
-		evt.Skip();
-		if (!m_installedList || m_installedList->GetColumnCount() < 5)
-			return;
-		const int availW = m_installedList->GetClientSize().GetWidth() - 8;
-		if (availW <= 500)
-			return;
-		const int w0 = std::max(95, static_cast<int>(availW * 0.11));
-		const int w1 = static_cast<int>(availW * 0.30);
-		const int w2 = static_cast<int>(availW * 0.20);
-		const int w3 = static_cast<int>(availW * 0.15);
-		const int w4 = std::max(140, availW - (w0 + w1 + w2 + w3));
-		m_installedList->SetColumnWidth(0, w0);
-		m_installedList->SetColumnWidth(1, w1);
-		m_installedList->SetColumnWidth(2, w2);
-		m_installedList->SetColumnWidth(3, w3);
-		m_installedList->SetColumnWidth(4, w4);
-	});
 	sizer->Add(m_installedList, 1, wxEXPAND | wxALL, 6);
 
 	auto* btnRow = new wxBoxSizer(wxHORIZONTAL);
@@ -849,22 +857,136 @@ wxPanel* GameBananaWindow::CreateCheatsTab(wxWindow* parent)
 
 void GameBananaWindow::UpdatePlaceholderBitmap()
 {
+	m_currentPreviewImage.Destroy();
+	RenderPreviewBitmap();
+}
+
+void GameBananaWindow::RenderPreviewBitmap()
+{
 	if (!m_previewBitmap)
 		return;
-	wxBitmap bmp(440, 248);
+
+	const int w = std::max(160, m_previewTargetSize.GetWidth());
+	const int h = std::max(90, m_previewTargetSize.GetHeight());
+
+	if (m_currentPreviewImage.IsOk())
+	{
+		wxImage scaled = m_currentPreviewImage.Scale(w, h, wxIMAGE_QUALITY_HIGH);
+		if (scaled.IsOk())
+		{
+			m_previewBitmap->SetBitmap(wxBitmap(scaled));
+			return;
+		}
+	}
+
+	wxBitmap bmp(w, h);
 	wxMemoryDC dc(bmp);
 	const bool dark = CemuApp::IsDarkMode();
 	dc.SetBackground(wxBrush(dark ? wxColour(38, 38, 44) : wxColour(230, 232, 238)));
 	dc.Clear();
 	dc.SetPen(wxPen(dark ? wxColour(75, 75, 85) : wxColour(190, 195, 205), 1));
 	dc.SetBrush(*wxTRANSPARENT_BRUSH);
-	dc.DrawRectangle(0, 0, 440, 248);
+	dc.DrawRectangle(0, 0, w, h);
 	dc.SetTextForeground(dark ? wxColour(180, 185, 195) : wxColour(90, 95, 105));
 	wxString label = _("GameBanana Preview");
 	wxSize ext = dc.GetTextExtent(label);
-	dc.DrawText(label, (440 - ext.GetWidth()) / 2, (248 - ext.GetHeight()) / 2);
+	dc.DrawText(label, (w - ext.GetWidth()) / 2, (h - ext.GetHeight()) / 2);
 	dc.SelectObject(wxNullBitmap);
 	m_previewBitmap->SetBitmap(bmp);
+}
+
+void GameBananaWindow::UpdateResponsiveLayout()
+{
+	if (m_updatingLayout)
+		return;
+	m_updatingLayout = true;
+
+	const int vscrollW = std::max(18, wxSystemSettings::GetMetric(wxSYS_VSCROLL_X));
+
+	// 1. Safely resize m_list columns using outer widget width minus scrollbar + safety margin
+	// so WS_HSCROLL never toggles on/off and never causes a Win32 WM_SIZE oscillation loop.
+	if (m_list && m_list->GetColumnCount() >= 6)
+	{
+		const int availW = m_list->GetSize().GetWidth() - vscrollW - 24;
+		if (availW > 360)
+		{
+			const int w0 = static_cast<int>(availW * 0.37);
+			const int w1 = static_cast<int>(availW * 0.21);
+			const int w2 = static_cast<int>(availW * 0.14);
+			const int w3 = static_cast<int>(availW * 0.14);
+			const int w4 = std::max(50, static_cast<int>(availW * 0.065));
+			const int w5 = std::max(58, availW - (w0 + w1 + w2 + w3 + w4));
+			if (std::abs(m_list->GetColumnWidth(0) - w0) >= 3 ||
+				std::abs(m_list->GetColumnWidth(5) - w5) >= 3)
+			{
+				m_list->Freeze();
+				m_list->SetColumnWidth(0, w0);
+				m_list->SetColumnWidth(1, w1);
+				m_list->SetColumnWidth(2, w2);
+				m_list->SetColumnWidth(3, w3);
+				m_list->SetColumnWidth(4, w4);
+				m_list->SetColumnWidth(5, w5);
+				m_list->Thaw();
+			}
+		}
+	}
+
+	// 2. Safely resize m_installedList columns
+	if (m_installedList && m_installedList->GetColumnCount() >= 5)
+	{
+		const int availW = m_installedList->GetSize().GetWidth() - vscrollW - 24;
+		if (availW > 420)
+		{
+			const int w0 = std::max(90, static_cast<int>(availW * 0.11));
+			const int w1 = static_cast<int>(availW * 0.30);
+			const int w2 = static_cast<int>(availW * 0.20);
+			const int w3 = static_cast<int>(availW * 0.15);
+			const int w4 = std::max(130, availW - (w0 + w1 + w2 + w3));
+			if (std::abs(m_installedList->GetColumnWidth(1) - w1) >= 3 ||
+				std::abs(m_installedList->GetColumnWidth(4) - w4) >= 3)
+			{
+				m_installedList->Freeze();
+				m_installedList->SetColumnWidth(0, w0);
+				m_installedList->SetColumnWidth(1, w1);
+				m_installedList->SetColumnWidth(2, w2);
+				m_installedList->SetColumnWidth(3, w3);
+				m_installedList->SetColumnWidth(4, w4);
+				m_installedList->Thaw();
+			}
+		}
+	}
+
+	// 3. Dynamically scale m_previewBitmap height based on dialog height so windowed mode
+	// never clips the bottom buttons and maximized mode shows a large 440x248 preview.
+	if (m_previewBitmap)
+	{
+		const int dlgH = GetClientSize().GetHeight();
+		int targetH = std::clamp(dlgH - 410, 148, 248);
+		int targetW = (targetH * 16) / 9;
+
+		if (wxWindow* boxParent = m_previewBitmap->GetParent())
+		{
+			const int maxBoxW = boxParent->GetSize().GetWidth() - 28;
+			if (maxBoxW >= 240 && targetW > maxBoxW)
+			{
+				targetW = maxBoxW;
+				targetH = (targetW * 9) / 16;
+			}
+		}
+
+		if (std::abs(targetW - m_previewTargetSize.GetWidth()) >= 6 ||
+			std::abs(targetH - m_previewTargetSize.GetHeight()) >= 4)
+		{
+			m_previewTargetSize = wxSize(targetW, targetH);
+			m_previewBitmap->SetMinSize(m_previewTargetSize);
+			m_previewBitmap->SetSize(m_previewTargetSize);
+			RenderPreviewBitmap();
+			if (m_notebook && m_notebook->GetPageCount() > 0 && m_notebook->GetPage(0))
+				m_notebook->GetPage(0)->Layout();
+		}
+	}
+
+	m_updatingLayout = false;
 }
 
 void GameBananaWindow::SetStatus(const wxString& text)
@@ -1090,7 +1212,7 @@ void GameBananaWindow::ApplyClientFiltersAndShow()
 	{
 		m_list->SetItemState(0, wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED, wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED);
 	}
-	m_list->SendSizeEvent();
+	UpdateResponsiveLayout();
 }
 
 void GameBananaWindow::OnModSelected(wxListEvent& event)
@@ -1251,8 +1373,8 @@ void GameBananaWindow::FetchModDetailsAndThumbnail(size_t visibleIndex)
 				wxImage img;
 				if (img.LoadFile(stream) && img.IsOk())
 				{
-					img.Rescale(440, 248, wxIMAGE_QUALITY_HIGH);
-					m_previewBitmap->SetBitmap(wxBitmap(img));
+					m_currentPreviewImage = img;
+					RenderPreviewBitmap();
 				}
 			}
 		});
