@@ -20,17 +20,98 @@
 // includes
 #include "gui/wxcomponents/checkedlistctrl.h"
 #include <wx/icon.h>
-
+#include <wx/image.h>
 #include <wx/settings.h>
+#include <algorithm>
+#include <cmath>
 
 #if wxUSE_CHECKEDLISTCTRL
 
-// resources
+namespace
+{
+	double DistToSegment(double px, double py, double ax, double ay, double bx, double by)
+	{
+		const double vx = bx - ax;
+		const double vy = by - ay;
+		const double wx = px - ax;
+		const double wy = py - ay;
+		const double lenSq = vx * vx + vy * vy;
+		const double t = (lenSq > 0.0) ? std::clamp((wx * vx + wy * vy) / lenSq, 0.0, 1.0) : 0.0;
+		return std::hypot(px - (ax + t * vx), py - (ay + t * vy));
+	}
 
-#include "gui/wxcomponents/checked.xpm"
-#include "gui/wxcomponents/unchecked.xpm"
-#include "gui/wxcomponents/checked_dis.xpm"
-#include "gui/wxcomponents/unchecked_dis.xpm"
+	wxBitmap CreateListCheckboxBitmap(int sz, bool checked, bool enabled)
+	{
+		wxImage img(sz, sz, true);
+		img.InitAlpha();
+
+		const wxColour fillCol = checked
+			? (enabled ? wxColour(30, 130, 247) : wxColour(55, 95, 145))
+			: (enabled ? wxColour(40, 44, 54)   : wxColour(38, 40, 46));
+		const wxColour borderCol = checked
+			? (enabled ? wxColour(90, 175, 255) : wxColour(85, 125, 175))
+			: (enabled ? wxColour(170, 182, 200) : wxColour(90, 96, 108));
+		const wxColour checkCol = enabled ? wxColour(255, 255, 255) : wxColour(200, 210, 225);
+
+		const double cx = sz * 0.5;
+		const double cy = sz * 0.5;
+		const double half = sz * 0.5 - 1.5;
+		const double radius = 3.5;
+		const double borderW = 2.0;
+
+		const double x0 = sz * 0.26, y0 = sz * 0.52;
+		const double x1 = sz * 0.44, y1 = sz * 0.71;
+		const double x2 = sz * 0.76, y2 = sz * 0.30;
+		const double strokeR = std::max(1.4, sz * 0.072);
+
+		for (int py = 0; py < sz; ++py)
+		{
+			for (int px = 0; px < sz; ++px)
+			{
+				const double x = px + 0.5;
+				const double y = py + 0.5;
+
+				const double qx = std::abs(x - cx) - (half - radius);
+				const double qy = std::abs(y - cy) - (half - radius);
+				const double distOuter = std::hypot(std::max(qx, 0.0), std::max(qy, 0.0)) + std::min(std::max(qx, qy), 0.0) - radius;
+
+				const double alpha = std::clamp(0.5 - distOuter, 0.0, 1.0);
+				if (alpha <= 0.0)
+				{
+					img.SetRGB(px, py, 0, 0, 0);
+					img.SetAlpha(px, py, 0);
+					continue;
+				}
+
+				const double distInner = distOuter + borderW;
+				const double borderMix = std::clamp(0.5 + distInner, 0.0, 1.0);
+
+				double r = fillCol.Red()   * (1.0 - borderMix) + borderCol.Red()   * borderMix;
+				double g = fillCol.Green() * (1.0 - borderMix) + borderCol.Green() * borderMix;
+				double b = fillCol.Blue()  * (1.0 - borderMix) + borderCol.Blue()  * borderMix;
+
+				if (checked)
+				{
+					const double dCheck = std::min(
+						DistToSegment(x, y, x0, y0, x1, y1),
+						DistToSegment(x, y, x1, y1, x2, y2));
+					const double checkMix = std::clamp(0.5 - (dCheck - strokeR), 0.0, 1.0);
+					r = r * (1.0 - checkMix) + checkCol.Red()   * checkMix;
+					g = g * (1.0 - checkMix) + checkCol.Green() * checkMix;
+					b = b * (1.0 - checkMix) + checkCol.Blue()  * checkMix;
+				}
+
+				img.SetRGB(px, py,
+					static_cast<unsigned char>(std::clamp(r + 0.5, 0.0, 255.0)),
+					static_cast<unsigned char>(std::clamp(g + 0.5, 0.0, 255.0)),
+					static_cast<unsigned char>(std::clamp(b + 0.5, 0.0, 255.0)));
+				img.SetAlpha(px, py, static_cast<unsigned char>(std::clamp(alpha * 255.0 + 0.5, 0.0, 255.0)));
+			}
+		}
+
+		return wxBitmap(img, 32);
+	}
+}
 
 IMPLEMENT_CLASS(wxCheckedListCtrl, wxListCtrl)
 BEGIN_EVENT_TABLE(wxCheckedListCtrl, wxListCtrl)
@@ -55,10 +136,10 @@ bool wxCheckedListCtrl::Create(wxWindow* parent, wxWindowID id, const wxPoint& p
     SetImageList(&m_imageList, wxIMAGE_LIST_SMALL);
 
 	// the add order must respect the wxCLC_XXX_IMGIDX defines in the headers !
-    m_imageList.Add(wxIcon(unchecked_xpm));
-    m_imageList.Add(wxIcon(checked_xpm));
-    m_imageList.Add(wxIcon(unchecked_dis_xpm));
-    m_imageList.Add(wxIcon(checked_dis_xpm));
+    m_imageList.Add(CreateListCheckboxBitmap(22, false, true));
+    m_imageList.Add(CreateListCheckboxBitmap(22, true,  true));
+    m_imageList.Add(CreateListCheckboxBitmap(22, false, false));
+    m_imageList.Add(CreateListCheckboxBitmap(22, true,  false));
 
 	return TRUE;
 }

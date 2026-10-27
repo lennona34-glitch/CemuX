@@ -296,18 +296,18 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 		sizer->Add(new wxStaticLine(m_right_panel, wxID_ANY), 0, wxLEFT|wxRIGHT | wxEXPAND, 3);
 
 		auto* row = new wxBoxSizer(wxHORIZONTAL);
-		m_update_graphicPacks = new wxButton(m_right_panel, wxID_ANY, _("Download latest community graphic packs"));
+		m_update_graphicPacks = new wxButton(m_right_panel, wxID_ANY, _("Update Community Packs"));
 		m_update_graphicPacks->Bind(wxEVT_BUTTON, &GraphicPacksWindow2::OnCheckForUpdates, this);
-		row->Add(m_update_graphicPacks, 0, wxALL, 5);
+		row->Add(m_update_graphicPacks, 1, wxALL | wxEXPAND, 4);
 
-		auto* gamebanana_btn = new wxButton(m_right_panel, wxID_ANY, _("Browse GameBanana mods..."));
+		auto* gamebanana_btn = new wxButton(m_right_panel, wxID_ANY, _("Browse GameBanana Mods..."));
 		gamebanana_btn->Bind(wxEVT_BUTTON, [this, title_id_filter](wxCommandEvent&) {
 			SaveStateToConfig();
 			GameBananaWindow dlg(this, title_id_filter);
 			dlg.ShowModal();
 			FillGraphicPackList();
 		});
-		row->Add(gamebanana_btn, 0, wxALL, 5);
+		row->Add(gamebanana_btn, 1, wxALL | wxEXPAND, 4);
 
 		sizer->Add(row, 0, wxALL | wxEXPAND, 5);
 

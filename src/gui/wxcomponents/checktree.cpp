@@ -1,14 +1,138 @@
 #include "gui/wxcomponents/checktree.h"
-#include "gui/wxcomponents/checked2.xpm"
-#include "gui/wxcomponents/checked_d.xpm"
-#include "gui/wxcomponents/checked_ld.xpm"
-#include "gui/wxcomponents/checked_mo.xpm"
-#include "gui/wxcomponents/unchecked2.xpm"
-#include "gui/wxcomponents/unchecked_d.xpm"
-#include "gui/wxcomponents/unchecked_ld.xpm"
-#include "gui/wxcomponents/unchecked_mo.xpm"
 #include <wx/icon.h>
 #include <wx/imaglist.h>
+#include <wx/image.h>
+#include <algorithm>
+#include <cmath>
+
+namespace
+{
+	double DistToSegment(double px, double py, double ax, double ay, double bx, double by)
+	{
+		const double vx = bx - ax;
+		const double vy = by - ay;
+		const double wx = px - ax;
+		const double wy = py - ay;
+		const double lenSq = vx * vx + vy * vy;
+		const double t = (lenSq > 0.0) ? std::clamp((wx * vx + wy * vy) / lenSq, 0.0, 1.0) : 0.0;
+		return std::hypot(px - (ax + t * vx), py - (ay + t * vy));
+	}
+
+	wxBitmap CreateCheckTreeStateBitmap(int sz, bool checked, bool hover, bool pressed, bool disabled)
+	{
+		wxImage img(sz, sz, true);
+		img.InitAlpha();
+
+		wxColour fillCol;
+		wxColour borderCol;
+
+		if (checked)
+		{
+			if (disabled)
+			{
+				fillCol   = wxColour(55, 95, 145);
+				borderCol = wxColour(85, 125, 175);
+			}
+			else if (pressed)
+			{
+				fillCol   = wxColour(20, 105, 210);
+				borderCol = wxColour(100, 180, 255);
+			}
+			else if (hover)
+			{
+				fillCol   = wxColour(55, 150, 255);
+				borderCol = wxColour(145, 205, 255);
+			}
+			else
+			{
+				fillCol   = wxColour(30, 130, 247);
+				borderCol = wxColour(90, 175, 255);
+			}
+		}
+		else
+		{
+			if (disabled)
+			{
+				fillCol   = wxColour(38, 40, 46);
+				borderCol = wxColour(90, 96, 108);
+			}
+			else if (pressed)
+			{
+				fillCol   = wxColour(32, 36, 44);
+				borderCol = wxColour(90, 175, 255);
+			}
+			else if (hover)
+			{
+				fillCol   = wxColour(52, 58, 72);
+				borderCol = wxColour(115, 190, 255);
+			}
+			else
+			{
+				fillCol   = wxColour(40, 44, 54);
+				borderCol = wxColour(170, 182, 200);
+			}
+		}
+
+		const wxColour checkCol = disabled ? wxColour(200, 210, 225) : wxColour(255, 255, 255);
+		const double cx = sz * 0.5;
+		const double cy = sz * 0.5;
+		const double half = sz * 0.5 - 1.5;
+		const double radius = 3.5;
+		const double borderW = 2.0;
+
+		const double x0 = sz * 0.26, y0 = sz * 0.52;
+		const double x1 = sz * 0.44, y1 = sz * 0.71;
+		const double x2 = sz * 0.76, y2 = sz * 0.30;
+		const double strokeR = std::max(1.4, sz * 0.072);
+
+		for (int py = 0; py < sz; ++py)
+		{
+			for (int px = 0; px < sz; ++px)
+			{
+				const double x = px + 0.5;
+				const double y = py + 0.5;
+
+				const double qx = std::abs(x - cx) - (half - radius);
+				const double qy = std::abs(y - cy) - (half - radius);
+				const double distOuter = std::hypot(std::max(qx, 0.0), std::max(qy, 0.0)) + std::min(std::max(qx, qy), 0.0) - radius;
+
+				const double alpha = std::clamp(0.5 - distOuter, 0.0, 1.0);
+				if (alpha <= 0.0)
+				{
+					img.SetRGB(px, py, 0, 0, 0);
+					img.SetAlpha(px, py, 0);
+					continue;
+				}
+
+				const double distInner = distOuter + borderW;
+				const double borderMix = std::clamp(0.5 + distInner, 0.0, 1.0);
+
+				double r = fillCol.Red()   * (1.0 - borderMix) + borderCol.Red()   * borderMix;
+				double g = fillCol.Green() * (1.0 - borderMix) + borderCol.Green() * borderMix;
+				double b = fillCol.Blue()  * (1.0 - borderMix) + borderCol.Blue()  * borderMix;
+
+				if (checked)
+				{
+					const double dCheck = std::min(
+						DistToSegment(x, y, x0, y0, x1, y1),
+						DistToSegment(x, y, x1, y1, x2, y2));
+					const double checkMix = std::clamp(0.5 - (dCheck - strokeR), 0.0, 1.0);
+					r = r * (1.0 - checkMix) + checkCol.Red()   * checkMix;
+					g = g * (1.0 - checkMix) + checkCol.Green() * checkMix;
+					b = b * (1.0 - checkMix) + checkCol.Blue()  * checkMix;
+				}
+
+				img.SetRGB(px, py,
+					static_cast<unsigned char>(std::clamp(r + 0.5, 0.0, 255.0)),
+					static_cast<unsigned char>(std::clamp(g + 0.5, 0.0, 255.0)),
+					static_cast<unsigned char>(std::clamp(b + 0.5, 0.0, 255.0)));
+				img.SetAlpha(px, py, static_cast<unsigned char>(std::clamp(alpha * 255.0 + 0.5, 0.0, 255.0)));
+			}
+		}
+
+		return wxBitmap(img, 32);
+	}
+}
 
 wxDEFINE_EVENT(wxEVT_CHECKTREE_FOCUS, wxTreeEvent);
 wxDEFINE_EVENT(wxEVT_CHECKTREE_CHOICE, wxTreeEvent);
@@ -108,16 +232,20 @@ wxCheckTree::wxCheckTree(wxWindow* parent, const wxWindowID id, const wxPoint& p
 
 void wxCheckTree::Init()
 {
-	wxIcon icons[8] = 
-	{
-		wxIcon(unchecked2_xpm), wxIcon(unchecked_mo_xpm), wxIcon(unchecked_ld_xpm), wxIcon(unchecked_d_xpm), wxIcon(checked2_xpm), wxIcon(checked_mo_xpm), wxIcon(checked_ld_xpm), wxIcon(checked_d_xpm)
-	};
+	const int charH = GetCharHeight();
+	const int iconSize = std::clamp(std::max(FromDIP(22), charH + 4), 22, 30);
 
-	// Make an state image list containing small icons
-	auto states = new wxImageList(icons[0].GetWidth(), icons[0].GetHeight(), true);
-
-	for (const auto& icon : icons)
-		states->Add(icon);
+	auto states = new wxImageList(iconSize, iconSize, true);
+	// Order matches enum: UNCHECKED, UNCHECKED_MOUSE_OVER, UNCHECKED_LEFT_DOWN, UNCHECKED_DISABLED,
+	//                     CHECKED,   CHECKED_MOUSE_OVER,   CHECKED_LEFT_DOWN,   CHECKED_DISABLED
+	states->Add(CreateCheckTreeStateBitmap(iconSize, false, false, false, false));
+	states->Add(CreateCheckTreeStateBitmap(iconSize, false, true,  false, false));
+	states->Add(CreateCheckTreeStateBitmap(iconSize, false, true,  true,  false));
+	states->Add(CreateCheckTreeStateBitmap(iconSize, false, false, false, true));
+	states->Add(CreateCheckTreeStateBitmap(iconSize, true,  false, false, false));
+	states->Add(CreateCheckTreeStateBitmap(iconSize, true,  true,  false, false));
+	states->Add(CreateCheckTreeStateBitmap(iconSize, true,  true,  true,  false));
+	states->Add(CreateCheckTreeStateBitmap(iconSize, true,  false, false, true));
 
 	AssignStateImageList(states);
 
