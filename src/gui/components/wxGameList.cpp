@@ -731,8 +731,8 @@ void wxGameList::OnContextMenuSelected(wxCommandEvent& event)
 			}
 			case kContextMenuGameBananaMods:
 			{
-				GameBananaWindow dialog(GetParent(), gameInfo.GetBaseTitleId(), gameInfo.GetTitleName());
-				dialog.ShowModal();
+				auto dialog = std::make_unique<GameBananaWindow>(GetParent(), gameInfo.GetBaseTitleId(), gameInfo.GetTitleName());
+				dialog->ShowModal();
 				break;
 			}
             case kContextMenuCreateShortcut:

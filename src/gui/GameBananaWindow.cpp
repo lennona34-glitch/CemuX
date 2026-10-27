@@ -5,6 +5,7 @@
 #include <cctype>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 
 #include <curl/curl.h>
 #include <zip.h>
@@ -1676,6 +1677,66 @@ bool GameBananaWindow::InstallZipAsGraphicPack(const std::vector<uint8>& zipByte
 		if (std::unique_ptr<FileStream> fsRules{FileStream::createFile2(rulesFile)})
 		{
 			fsRules->writeString(rules.str().c_str());
+		}
+	}
+
+	// Ensure mods that ship known Wii U game asset folders (e.g. ObjectData/, StageData/, Model/, driver/)
+	// or loose .szs/.pack files without a top-level content/ directory also populate packRoot/content/
+	if (!fs::exists(packRoot / "content", ec))
+	{
+		static const std::unordered_set<std::string> kKnownContentSubdirs = {
+			"objectdata", "stagedata", "sounddata", "systemdata", "layoutdata", "effectdata",
+			"shaderdata", "localizeddata", "model", "pack", "course", "audio", "common",
+			"cafe", "driver", "mapobj", "ui", "item", "kart", "actor", "map", "sound", "layout"
+		};
+
+		std::vector<fs::path> matchedSubdirs;
+		for (fs::recursive_directory_iterator it(packRoot, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+		{
+			if (!it->is_directory(ec))
+				continue;
+			const std::string dirLower = boost::algorithm::to_lower_copy(_pathToUtf8(it->path().filename()));
+			if (kKnownContentSubdirs.count(dirLower) > 0)
+			{
+				matchedSubdirs.push_back(it->path());
+				it.disable_recursion_pending();
+			}
+		}
+
+		for (const auto& subdir : matchedSubdirs)
+		{
+			const fs::path dst = packRoot / "content" / subdir.filename();
+			fs::create_directories(dst, ec);
+			fs::copy(subdir, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+		}
+
+		// If still no content/ directory, check for loose .szs / .pack files (common in SM3DW & SMM skin mods)
+		if (!fs::exists(packRoot / "content", ec))
+		{
+			const bool isSm3dw = boost::icontains(fallbackTitleIds, "10145c00") || boost::icontains(gameName, "3D World");
+			const bool isSmm   = boost::icontains(fallbackTitleIds, "1018dc00") || boost::icontains(gameName, "Mario Maker");
+			std::vector<fs::path> looseFiles;
+			for (fs::recursive_directory_iterator it(packRoot, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+			{
+				if (!it->is_regular_file(ec))
+					continue;
+				const std::string extLower = boost::algorithm::to_lower_copy(_pathToUtf8(it->path().extension()));
+				if (extLower == ".szs" || extLower == ".pack")
+					looseFiles.push_back(it->path());
+			}
+			for (const auto& lf : looseFiles)
+			{
+				const std::string extLower = boost::algorithm::to_lower_copy(_pathToUtf8(lf.extension()));
+				fs::path subDest = packRoot / "content";
+				if (isSm3dw && extLower == ".szs")
+					subDest /= "ObjectData";
+				else if (isSmm && extLower == ".szs")
+					subDest /= "Model";
+				else if (isSmm && extLower == ".pack")
+					subDest /= "Pack";
+				fs::create_directories(subDest, ec);
+				fs::copy_file(lf, subDest / lf.filename(), fs::copy_options::overwrite_existing, ec);
+			}
 		}
 	}
 

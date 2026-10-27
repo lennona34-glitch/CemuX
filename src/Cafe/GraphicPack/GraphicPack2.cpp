@@ -12,6 +12,7 @@
 #include "util/helpers/StringHelpers.h"
 #include "Cafe/CafeSystem.h"
 #include <cinttypes>
+#include <unordered_set>
 
 std::vector<GraphicPackPtr> GraphicPack2::s_graphic_packs;
 std::vector<GraphicPackPtr> GraphicPack2::s_active_graphic_packs;
@@ -843,6 +844,65 @@ void GraphicPack2::_iterateReplacedFiles(const fs::path& currentPath, bool isAOC
 	}
 }
 
+namespace
+{
+	void BuildFscContentFileIndex(const std::string& virtualDir, int depth, std::unordered_map<std::string, std::string>& outIndex)
+	{
+		if (depth > 4)
+			return;
+		sint32 status = 0;
+		FSCVirtualFile* dirIt = fsc_openDirIterator(virtualDir.c_str(), &status);
+		if (!dirIt)
+			return;
+		FSCDirEntry entry{};
+		while (fsc_nextDir(dirIt, &entry))
+		{
+			std::string name(entry.GetPath());
+			if (name.empty() || name == "." || name == "..")
+				continue;
+			std::string fullVirt = virtualDir;
+			if (!fullVirt.empty() && fullVirt.back() != '/')
+				fullVirt.push_back('/');
+			fullVirt += name;
+			if (entry.isDirectory)
+			{
+				BuildFscContentFileIndex(fullVirt, depth + 1, outIndex);
+			}
+			else if (entry.isFile)
+			{
+				std::string lowerName = boost::algorithm::to_lower_copy(name);
+				// Strip leading '/' so it matches "vol/content/..." used by fscDeviceRedirect_add
+				std::string redirectKey = (!fullVirt.empty() && fullVirt.front() == '/') ? fullVirt.substr(1) : fullVirt;
+				outIndex.try_emplace(lowerName, redirectKey);
+			}
+		}
+		fsc_close(dirIt);
+	}
+
+	const std::unordered_map<std::string, std::string>& GetCurrentTitleContentIndex(uint64 titleId)
+	{
+		static uint64 s_indexedTitleId = 0;
+		static std::unordered_map<std::string, std::string> s_index;
+		if (s_indexedTitleId != titleId)
+		{
+			s_indexedTitleId = titleId;
+			s_index.clear();
+			BuildFscContentFileIndex("/vol/content", 0, s_index);
+		}
+		return s_index;
+	}
+
+	bool IsNonGameAssetExtension(std::string extLower)
+	{
+		static const std::unordered_set<std::string> s_ignored = {
+			".txt", ".asm", ".glsl", ".hlsl", ".spv", ".md", ".png", ".jpg", ".jpeg",
+			".webp", ".gif", ".bmp", ".ico", ".db", ".ini", ".json", ".pdf", ".url",
+			".bat", ".sh", ".exe", ".dll", ".zip", ".rar", ".7z", ".tmod"
+		};
+		return s_ignored.count(extLower) > 0;
+	}
+}
+
 void GraphicPack2::LoadReplacedFiles()
 {
 	if (m_patchedFilesLoaded)
@@ -875,6 +935,46 @@ void GraphicPack2::LoadReplacedFiles()
 		// setup redirections	
 		fscDeviceRedirect_map();
 		_iterateReplacedFiles(aocPath, true);
+	}
+
+	// Auto-map loose or non-standard mod files (e.g., GameBanana skins placed in ObjectData/ or at pack root without content/)
+	for (auto it = fs::recursive_directory_iterator(gfxPackPath, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+	{
+		if (!fs::is_regular_file(it->status(ec)))
+			continue;
+
+		fs::path relPath = fs::relative(it->path(), gfxPackPath, ec);
+		if (ec || relPath.empty())
+			continue;
+
+		std::string firstComp = boost::algorithm::to_lower_copy(relPath.begin()->generic_string());
+		if (firstComp == "content" || firstComp == "aoc" || firstComp == "code")
+			continue;
+
+		std::string extLower = boost::algorithm::to_lower_copy(it->path().extension().generic_string());
+		if (IsNonGameAssetExtension(extLower))
+			continue;
+
+		std::string relGeneric = relPath.generic_string();
+		std::string candidateVirtCheck = "/vol/content/" + relGeneric;
+		if (fsc_doesFileExist(candidateVirtCheck.c_str(), FSC_PRIORITY_PATCH))
+		{
+			fscDeviceRedirect_map();
+			std::string redirectVirt = "vol/content/" + relGeneric;
+			fscDeviceRedirect_add(redirectVirt, it->file_size(ec), it->path().generic_string(), m_fs_priority);
+			cemuLog_log(LogType::Force, "GraphicPack auto-mapped '{}' -> '{}'", relGeneric, redirectVirt);
+			continue;
+		}
+
+		const auto& index = GetCurrentTitleContentIndex(CafeSystem::GetForegroundTitleId());
+		std::string fileNameLower = boost::algorithm::to_lower_copy(it->path().filename().generic_string());
+		auto foundIt = index.find(fileNameLower);
+		if (foundIt != index.end())
+		{
+			fscDeviceRedirect_map();
+			fscDeviceRedirect_add(foundIt->second, it->file_size(ec), it->path().generic_string(), m_fs_priority);
+			cemuLog_log(LogType::Force, "GraphicPack auto-mapped loose file '{}' -> '{}'", relGeneric, foundIt->second);
+		}
 	}
 }
 

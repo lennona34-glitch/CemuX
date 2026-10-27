@@ -50,6 +50,10 @@ add_library(CemuGui
   dialogs/SaveImport/SaveTransfer.h
   DownloadGraphicPacksWindow.cpp
   DownloadGraphicPacksWindow.h
+  GameBananaWindow.cpp
+  GameBananaWindow.h
+  QuestVRWindow.cpp
+  QuestVRWindow.h
   GameProfileWindow.cpp
   GameProfileWindow.h
   GameUpdateWindow.cpp

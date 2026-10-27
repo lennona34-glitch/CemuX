@@ -598,15 +598,9 @@ void DumpThreadStackTrace();
 void CemuApp::OnAssertFailure(const wxChar* file, int line, const wxChar* func, const wxChar* cond, const wxChar* msg)
 {
 	cemuLog_createLogFile(false);
-	cemuLog_log(LogType::Force, "Encountered wxWidgets assert!");
-	cemuLog_log(LogType::Force, "File: {0} Line: {1}", wxString(file).utf8_string(), line);
-	cemuLog_log(LogType::Force, "Func: {0} Cond: {1}", wxString(func).utf8_string(), wxString(cond).utf8_string());
-	cemuLog_log(LogType::Force, "Message: {}", wxString(msg).utf8_string());
-
-#if BOOST_OS_WINDOWS
-	DumpThreadStackTrace();
-#endif
-	cemu_assert_debug(false);
+	cemuLog_log(LogType::Force, "Encountered wxWidgets assert: {}:{} ({}) Cond: {} Msg: {}",
+				wxString(file).utf8_string(), line, wxString(func).utf8_string(),
+				wxString(cond).utf8_string(), wxString(msg).utf8_string());
 }
 
 int CemuApp::FilterEvent(wxEvent& event)

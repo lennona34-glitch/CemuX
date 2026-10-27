@@ -37,6 +37,7 @@
 #include "util/helpers/SystemException.h"
 #include "gui/DownloadGraphicPacksWindow.h"
 #include "gui/GameBananaWindow.h"
+#include "gui/QuestVRWindow.h"
 #include "gui/GettingStartedDialog.h"
 #include "gui/helpers/wxHelpers.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/VsyncDriver.h"
@@ -69,6 +70,7 @@
 extern WindowInfo g_window_info;
 extern std::shared_mutex g_mutex;
 static wxMenu* s_stopEmulationMenu = nullptr;
+static wxMenu* s_questVrMenu = nullptr;
 
 enum
 {
@@ -118,6 +120,7 @@ enum
 	MAINFRAME_MENU_ID_TOOLS_DOWNLOAD_MANAGER,
 	MAINFRAME_MENU_ID_TOOLS_EMULATED_USB_DEVICES,
 	MAINFRAME_MENU_ID_TOOLS_GAMEBANANA,
+	MAINFRAME_MENU_ID_TOOLS_QUEST_VR,
 	// cpu
 	// cpu->timer speed
 	MAINFRAME_MENU_ID_TIMER_SPEED_1X = 20700,
@@ -199,6 +202,7 @@ EVT_MENU(MAINFRAME_MENU_ID_TOOLS_TITLE_MANAGER, MainWindow::OnToolsInput)
 EVT_MENU(MAINFRAME_MENU_ID_TOOLS_DOWNLOAD_MANAGER, MainWindow::OnToolsInput)
 EVT_MENU(MAINFRAME_MENU_ID_TOOLS_EMULATED_USB_DEVICES, MainWindow::OnToolsInput)
 EVT_MENU(MAINFRAME_MENU_ID_TOOLS_GAMEBANANA, MainWindow::OnToolsInput)
+EVT_MENU(MAINFRAME_MENU_ID_TOOLS_QUEST_VR, MainWindow::OnToolsInput)
 // cpu menu
 EVT_MENU(MAINFRAME_MENU_ID_TIMER_SPEED_8X, MainWindow::OnDebugSetting)
 EVT_MENU(MAINFRAME_MENU_ID_TIMER_SPEED_4X, MainWindow::OnDebugSetting)
@@ -310,6 +314,7 @@ MainWindow::MainWindow()
 	HICON hWindowIcon = (HICON)LoadImageA(GetModuleHandleA(NULL), "M_WND_ICON16", IMAGE_ICON, 16, 16, 0);
 	if (hWindowIcon)
 		SendMessage(this->GetHWND(), WM_SETICON, ICON_SMALL, (LPARAM)hWindowIcon);
+	QuestVRWindow::SetMainAndPadHWNDs((uintptr_t)this->GetHWND(), 0);
 #endif
 
 	auto* main_sizer = new wxBoxSizer(wxVERTICAL);
@@ -438,6 +443,7 @@ void MainWindow::OnClose(wxCloseEvent& event)
 
 	SaveSettings();
 	m_timer->Stop();
+	QuestVRWindow::ShutdownBroadcast();
 
 	event.Skip();
 
@@ -686,6 +692,7 @@ void MainWindow::StopEmulation()
 
 	SaveSettings();
 	g_config.Save();
+	QuestVRWindow::ShutdownBroadcast();
 	cemuLog_waitForFlush();
 
 #if BOOST_OS_WINDOWS
@@ -847,11 +854,18 @@ void MainWindow::TogglePadView()
 		m_padView->Initialize();
 		if (m_game_launched)
 			m_padView->InitializeRenderCanvas();
+#if BOOST_OS_WINDOWS
+		QuestVRWindow::SetMainAndPadHWNDs((uintptr_t)(m_render_canvas ? m_render_canvas->GetHWND() : this->GetHWND()),
+										  (uintptr_t)m_padView->GetHWND());
+#endif
 	}
 	else if (m_padView)
 	{
 		m_padView->Destroy();
 		m_padView = nullptr;
+#if BOOST_OS_WINDOWS
+		QuestVRWindow::SetMainAndPadHWNDs((uintptr_t)(m_render_canvas ? m_render_canvas->GetHWND() : this->GetHWND()), 0);
+#endif
 	}
 }
 
@@ -873,10 +887,19 @@ WXLRESULT MainWindow::MSWWindowProc(WXUINT nMsg, WXWPARAM wParam, WXLPARAM lPara
 	{
 		if (m_game_launched && s_stopEmulationMenu && (HMENU)wParam == s_stopEmulationMenu->GetHMenu())
 		{
+			const WXLRESULT res = wxFrame::MSWWindowProc(nMsg, wParam, lParam);
 			::EndMenu();
 			wxCommandEvent evt(wxEVT_MENU, MAINFRAME_MENU_ID_FILE_END_EMULATION);
 			wxPostEvent(this, evt);
-			return 0;
+			return res;
+		}
+		if (s_questVrMenu && (HMENU)wParam == s_questVrMenu->GetHMenu())
+		{
+			const WXLRESULT res = wxFrame::MSWWindowProc(nMsg, wParam, lParam);
+			::EndMenu();
+			wxCommandEvent evt(wxEVT_MENU, MAINFRAME_MENU_ID_TOOLS_QUEST_VR);
+			wxPostEvent(this, evt);
+			return res;
 		}
 	}
 
@@ -889,10 +912,11 @@ void MainWindow::OpenSettings()
 	auto& config = GetConfig();
 	const auto language = config.language;
 
-	GeneralSettings2 frame(this, m_game_launched);
-	frame.ShowModal();
-	const bool paths_modified = frame.ShouldReloadGamelist();
-	const bool mlc_modified = frame.MLCModified();
+	auto frame = std::make_unique<GeneralSettings2>(this, m_game_launched);
+	frame->ShowModal();
+	const bool paths_modified = frame->ShouldReloadGamelist();
+	const bool mlc_modified = frame->MLCModified();
+	frame.reset();
 
 	if (paths_modified)
 		m_game_list->ReloadGameEntries(false);
@@ -912,9 +936,6 @@ void MainWindow::OpenSettings()
 	else
 		m_discord.reset();
 	#endif
-
-	if(config.check_update && !m_game_launched)
-		m_update_available = CemuUpdateWindow::IsUpdateAvailableAsync();
 
 	if (mlc_modified)
 		RecreateMenu();
@@ -1346,9 +1367,6 @@ void MainWindow::LoadSettings()
 	g_config.Load();
 	const auto& config = GetConfig();
 
-	if(config.check_update)
-		m_update_available = CemuUpdateWindow::IsUpdateAvailableAsync();
-
 	if (config.window_position != Vector2i{ -1,-1 })
 		this->SetPosition({ config.window_position.x, config.window_position.y });
 
@@ -1590,8 +1608,19 @@ void MainWindow::OnToolsInput(wxCommandEvent& event)
 			if (sel != wxNOT_FOUND)
 				titleId = static_cast<uint64>(m_game_list->GetItemData(sel));
 		}
-		GameBananaWindow dialog(this, titleId);
-		dialog.ShowModal();
+		auto dialog = std::make_unique<GameBananaWindow>(this, titleId);
+		dialog->ShowModal();
+		break;
+	}
+	case MAINFRAME_MENU_ID_TOOLS_QUEST_VR:
+	{
+#if BOOST_OS_WINDOWS
+		QuestVRWindow::SetMainAndPadHWNDs(
+			(uintptr_t)(m_render_canvas ? m_render_canvas->GetHWND() : this->GetHWND()),
+			(uintptr_t)(m_padView ? m_padView->GetHWND() : 0));
+#endif
+		auto dialog = std::make_unique<QuestVRWindow>(this);
+		dialog->ShowModal();
 		break;
 	}
 	case MAINFRAME_MENU_ID_TOOLS_EMULATED_USB_DEVICES:
@@ -1689,6 +1718,11 @@ void MainWindow::CreateCanvas()
 
 	if (m_padView)
 		m_padView->InitializeRenderCanvas();
+#if BOOST_OS_WINDOWS
+	QuestVRWindow::SetMainAndPadHWNDs(
+		(uintptr_t)(m_render_canvas ? m_render_canvas->GetHWND() : this->GetHWND()),
+		(uintptr_t)(m_padView ? m_padView->GetHWND() : 0));
+#endif
 }
 
 void MainWindow::DestroyCanvas()
@@ -1707,6 +1741,11 @@ void MainWindow::DestroyCanvas()
         m_game_panel->Destroy();
         m_game_panel = nullptr;
     }
+#if BOOST_OS_WINDOWS
+	QuestVRWindow::SetMainAndPadHWNDs(
+		(uintptr_t)this->GetHWND(),
+		(uintptr_t)(m_padView ? m_padView->GetHWND() : 0));
+#endif
 }
 
 void MainWindow::OnSizeEvent(wxSizeEvent& event)
@@ -1770,6 +1809,9 @@ void MainWindow::OnPadClose(wxCloseEvent& event)
 
 	// already deleted by wxwidget
 	m_padView = nullptr;
+#if BOOST_OS_WINDOWS
+	QuestVRWindow::SetMainAndPadHWNDs((uintptr_t)(m_render_canvas ? m_render_canvas->GetHWND() : this->GetHWND()), 0);
+#endif
 
 	if (m_padViewMenuItem)
 		m_padViewMenuItem->Check(false);
@@ -1939,10 +1981,10 @@ public:
 
 	void AddHeaderInfo(wxWindow* parent, wxSizer* sizer)
 	{
-		auto versionString = formatWxString(_("Cemu\nVersion {0}\nCompiled on {1}\nOriginal authors: {2}"), BUILD_VERSION_STRING, BUILD_DATE, "Exzap, Petergov");
+		auto versionString = formatWxString(_("CemuX (Enhanced Wii U & Quest VR Edition)\nVersion {0}\nCompiled on {1}\nOriginal Cemu authors: {2}"), BUILD_VERSION_STRING, BUILD_DATE, "Exzap, Petergov");
 
 		sizer->Add(new wxStaticText(parent, wxID_ANY, versionString), wxSizerFlags().Border(wxALL, 3).Border(wxTOP, 10));
-		sizer->Add(new wxHyperlinkCtrl(parent, -1, "https://cemu.info", "https://cemu.info"), wxSizerFlags().Expand().Border(wxTOP | wxBOTTOM, 3));
+		sizer->Add(new wxHyperlinkCtrl(parent, -1, "https://github.com/lennona34-glitch/CemuX", "https://github.com/lennona34-glitch/CemuX"), wxSizerFlags().Expand().Border(wxTOP | wxBOTTOM, 3));
 
 		sizer->AddSpacer(3);
 		sizer->Add(new wxStaticLine(parent), wxSizerFlags().Expand().Border(wxRIGHT, 4));
@@ -2268,7 +2310,9 @@ void MainWindow::RecreateMenu()
 	toolsMenu->Append(MAINFRAME_MENU_ID_TOOLS_TITLE_MANAGER, _("&Title Manager"));
 	toolsMenu->Append(MAINFRAME_MENU_ID_TOOLS_DOWNLOAD_MANAGER, _("&Download Manager"));
 	toolsMenu->Append(MAINFRAME_MENU_ID_TOOLS_EMULATED_USB_DEVICES, _("&Emulated USB Devices"));
+	toolsMenu->AppendSeparator();
 	toolsMenu->Append(MAINFRAME_MENU_ID_TOOLS_GAMEBANANA, _("&GameBanana Mod Manager (3D Models, Textures, Mods, Cheats)..."));
+	toolsMenu->Append(MAINFRAME_MENU_ID_TOOLS_QUEST_VR, _("&Quest VR / Mixed Reality Broadcast (Player 1 / Player 2)..."));
 
 	m_menuBar->Append(toolsMenu, _("&Tools"));
 
@@ -2372,18 +2416,17 @@ void MainWindow::RecreateMenu()
 	// debugMenu->Append(MAINFRAME_MENU_ID_DEBUG_DUMP_FST, _("&Dump WUD filesystem"))->Enable(false);
 
 	m_menuBar->Append(debugMenu, _("&Debug"));
-	// help menu
+	// help menu (Update option removed so CemuX is never overwritten by upstream Cemu)
 	wxMenu* helpMenu = new wxMenu();
-	m_check_update_menu = helpMenu->Append(MAINFRAME_MENU_ID_HELP_UPDATE, _("&Check for updates"));
-#if BOOST_OS_LINUX
-	if (!std::getenv("APPIMAGE")) {
-		m_check_update_menu->Enable(false);
-	}
-#endif
-	helpMenu->AppendSeparator();
-	helpMenu->Append(MAINFRAME_MENU_ID_HELP_ABOUT, _("&About Cemu"));
+	m_check_update_menu = nullptr;
+	helpMenu->Append(MAINFRAME_MENU_ID_HELP_ABOUT, _("&About CemuX"));
 
 	m_menuBar->Append(helpMenu, _("&Help"));
+
+	// Top-level Quest VR / MR Broadcast quick button
+	s_questVrMenu = new wxMenu();
+	s_questVrMenu->Append(MAINFRAME_MENU_ID_TOOLS_QUEST_VR, _("Quest VR / Mixed Reality Broadcast Studio..."));
+	m_menuBar->Append(s_questVrMenu, _("Quest VR"));
 
 	s_stopEmulationMenu = nullptr;
 	if (m_game_launched)
