@@ -147,6 +147,7 @@ public:
 
 private:
 	void RecreateMenu();
+	void StopEmulation();
 	void UpdateChildWindowTitleRunningState();
 	static wxString GetInitialWindowTitle();
 

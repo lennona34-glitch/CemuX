@@ -1603,7 +1603,45 @@ bool GameBananaWindow::InstallZipAsGraphicPack(const std::vector<uint8>& zipByte
 
 	// If the ZIP did not include a Cemu rules.txt, locate where content/ or aoc/ lives (or targetRoot) and generate rules.txt
 	fs::path packRoot = targetRoot;
-	if (!hasRulesTxt)
+	if (hasRulesTxt)
+	{
+		// Find the directory containing rules.txt
+		for (fs::recursive_directory_iterator it(targetRoot, ec); it != fs::recursive_directory_iterator(); ++it)
+		{
+			if (it->is_regular_file(ec) && boost::iequals(_pathToUtf8(it->path().filename()), "rules.txt"))
+			{
+				packRoot = it->path().parent_path();
+				break;
+			}
+		}
+
+		// Some GameBanana archives (e.g. Super Refreshed 3D World) place a partial content/ folder inside a
+		// nested graphicPacks/ subfolder alongside rules.txt while keeping the complete content/ folder higher up.
+		// Merge any sibling/outer content/ or aoc/ folders into packRoot so no stage or model files are missed.
+		std::vector<fs::path> extraContentDirs;
+		std::vector<fs::path> extraAocDirs;
+		for (fs::recursive_directory_iterator it(targetRoot, ec); it != fs::recursive_directory_iterator(); ++it)
+		{
+			if (!it->is_directory(ec))
+				continue;
+			const std::string dirName = _pathToUtf8(it->path().filename());
+			if (boost::iequals(dirName, "content") && it->path().parent_path() != packRoot)
+				extraContentDirs.push_back(it->path());
+			else if (boost::iequals(dirName, "aoc") && it->path().parent_path() != packRoot)
+				extraAocDirs.push_back(it->path());
+		}
+		for (const auto& srcContent : extraContentDirs)
+		{
+			fs::copy(srcContent, packRoot / "content",
+					 fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+		}
+		for (const auto& srcAoc : extraAocDirs)
+		{
+			fs::copy(srcAoc, packRoot / "aoc",
+					 fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+		}
+	}
+	else
 	{
 		for (fs::recursive_directory_iterator it(targetRoot, ec); it != fs::recursive_directory_iterator(); ++it)
 		{

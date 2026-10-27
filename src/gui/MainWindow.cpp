@@ -68,6 +68,7 @@
 
 extern WindowInfo g_window_info;
 extern std::shared_mutex g_mutex;
+static wxMenu* s_stopEmulationMenu = nullptr;
 
 enum
 {
@@ -671,14 +672,51 @@ void MainWindow::OnFileMenu(wxCommandEvent& event)
 	}
 	else if (menuId == MAINFRAME_MENU_ID_FILE_END_EMULATION)
 	{
-        CafeSystem::ShutdownTitle();
-		DestroyCanvas();
-		m_game_launched = false;
-		RecreateMenu();
-        CreateGameListAndStatusBar();
-        DoLayout();
-		UpdateChildWindowTitleRunningState();
+		StopEmulation();
 	}
+}
+
+void MainWindow::StopEmulation()
+{
+	if (!m_game_launched)
+		return;
+
+	if (IsFullScreen())
+		SetFullScreen(false);
+
+	SaveSettings();
+	g_config.Save();
+	cemuLog_waitForFlush();
+
+#if BOOST_OS_WINDOWS
+	wchar_t exePath[MAX_PATH]{};
+	if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) > 0)
+	{
+		std::wstring cmdLine = L"\"";
+		cmdLine += exePath;
+		cmdLine += L"\"";
+
+		STARTUPINFOW si{};
+		si.cb = sizeof(si);
+		PROCESS_INFORMATION pi{};
+		if (CreateProcessW(exePath, cmdLine.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi))
+		{
+			AllowSetForegroundWindow(pi.dwProcessId);
+			CloseHandle(pi.hThread);
+			CloseHandle(pi.hProcess);
+			Show(false);
+			ExitProcess(0);
+		}
+	}
+#endif
+
+	CafeSystem::ShutdownTitle();
+	DestroyCanvas();
+	m_game_launched = false;
+	RecreateMenu();
+	CreateGameListAndStatusBar();
+	DoLayout();
+	UpdateChildWindowTitleRunningState();
 }
 
 void MainWindow::OnOpenFolder(wxCommandEvent& event)
@@ -829,6 +867,16 @@ WXLRESULT MainWindow::MSWWindowProc(WXUINT nMsg, WXWPARAM wParam, WXLPARAM lPara
 		if (wParam == DBT_DEVNODES_CHANGED)
 		{
 			InputManager::instance().on_device_changed();
+		}
+	}
+	else if (nMsg == WM_INITMENUPOPUP)
+	{
+		if (m_game_launched && s_stopEmulationMenu && (HMENU)wParam == s_stopEmulationMenu->GetHMenu())
+		{
+			::EndMenu();
+			wxCommandEvent evt(wxEVT_MENU, MAINFRAME_MENU_ID_FILE_END_EMULATION);
+			wxPostEvent(this, evt);
+			return 0;
 		}
 	}
 
@@ -1472,10 +1520,16 @@ void MainWindow::OnKeyUp(wxKeyEvent& event)
 
 void MainWindow::OnKeyDown(wxKeyEvent& event)
 {
-	if ((event.AltDown() && event.GetKeyCode() == WXK_F4) || 
-		(event.CmdDown() && event.GetKeyCode() == 'Q'))
+	if (event.AltDown() && event.GetKeyCode() == WXK_F4)
 	{
 		Close(true);
+	}
+	else if (event.CmdDown() && event.GetKeyCode() == 'Q')
+	{
+		if (m_game_launched)
+			StopEmulation();
+		else
+			Close(true);
 	}
 	else
 	{
@@ -2136,9 +2190,8 @@ void MainWindow::RecreateMenu()
 	else
 	{
 		// add 'Stop emulation' menu entry to file menu
-#ifdef CEMU_DEBUG_ASSERT
-		m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_END_EMULATION, _("Stop emulation"));
-#endif
+		m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_END_EMULATION, _("&Stop emulation (Return to Main Menu)\tCtrl+Q"));
+		m_fileMenu->AppendSeparator();
 	}
 
 	m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_OPEN_CEMU_FOLDER, _("&Open Cemu folder"));
@@ -2331,6 +2384,14 @@ void MainWindow::RecreateMenu()
 	helpMenu->Append(MAINFRAME_MENU_ID_HELP_ABOUT, _("&About Cemu"));
 
 	m_menuBar->Append(helpMenu, _("&Help"));
+
+	s_stopEmulationMenu = nullptr;
+	if (m_game_launched)
+	{
+		s_stopEmulationMenu = new wxMenu();
+		s_stopEmulationMenu->Append(MAINFRAME_MENU_ID_FILE_END_EMULATION, _("Stop Emulation && Return to Main Menu\tCtrl+Q"));
+		m_menuBar->Append(s_stopEmulationMenu, _("Stop Emulation"));
+	}
 
 	SetMenuBar(m_menuBar);
 	m_menu_visible = true;

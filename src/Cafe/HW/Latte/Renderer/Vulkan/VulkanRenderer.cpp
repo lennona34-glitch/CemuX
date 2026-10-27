@@ -1944,8 +1944,15 @@ void VulkanRenderer::ProcessFinishedCommandBuffers()
 			// not signaled
 			break;
 		}
-		cemuLog_log(LogType::Force, "vkGetFenceStatus returned unexpected error {}", (sint32)fenceStatus);
+		static bool s_loggedFenceStatusError = false;
+		if (!s_loggedFenceStatusError)
+		{
+			s_loggedFenceStatusError = true;
+			cemuLog_log(LogType::Force, "vkGetFenceStatus returned unexpected error {} (suppressing further repeats)", (sint32)fenceStatus);
+		}
 		cemu_assert_debug(false);
+		m_commandBufferSyncIndex = (m_commandBufferSyncIndex + 1) % m_commandBuffers.size();
+		break;
 	}
 	if (finishedCmdBuffers)
 	{

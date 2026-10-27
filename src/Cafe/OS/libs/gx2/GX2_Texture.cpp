@@ -24,12 +24,18 @@ namespace GX2
 		if (texture->viewNumSlices == 0)
 			texture->viewNumSlices = 1;
 
-		if (texture->surface.height == 0)
-			texture->surface.height = 1;
-		if (texture->surface.depth == 0)
+		if (texture->surface.width == 0 || texture->surface.width > 16384)
+			texture->surface.width = 8;
+		if (texture->surface.height == 0 || texture->surface.height > 16384)
+			texture->surface.height = 8;
+		if (texture->surface.depth == 0 || texture->surface.depth > 2048)
 			texture->surface.depth = 1;
-		if (texture->surface.numLevels == 0)
+		if (texture->surface.numLevels == 0 || texture->surface.numLevels > 16)
 			texture->surface.numLevels = 1;
+		if ((uint32)texture->surface.format.value() == 0 || (uint32)texture->surface.format.value() >= 0x1000)
+			texture->surface.format = Latte::E_GX2SURFFMT::R8_G8_B8_A8_UNORM;
+		if (texture->surface.pitch == 0 || texture->surface.pitch > 16384)
+			texture->surface.pitch = 8;
 
 		// texture parameters
 		uint32 viewNumMips = texture->viewNumMips;
@@ -151,9 +157,13 @@ namespace GX2
 
 	void _GX2SetTexture(GX2Texture* tex, Latte::REGADDR baseRegister, uint32 textureUnitIndex)
 	{
+		if (!tex)
+			return;
 		GX2ReserveCmdSpace(2 + 7);
 
 		MPTR imagePtr = tex->surface.imagePtr;
+		if (imagePtr == MPTR_NULL)
+			imagePtr = MEMORY_TILINGAPERTURE_AREA_ADDR;
 		MPTR mipPtr = tex->surface.mipPtr;
 		if (mipPtr == MPTR_NULL)
 			mipPtr = imagePtr;
