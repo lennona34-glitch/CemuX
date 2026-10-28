@@ -52,10 +52,14 @@ bool LatteQueryObjectVk::getResult(uint64& numSamplesPassed)
 
 void LatteQueryObjectVk::beginFragment()
 {
+	if (m_hasActiveFragment)
+		return;
 	m_rendererVk->draw_endRenderPass();
 
 	handleFinishedFragments();
 	uint32 newQueryIndex = acquireQueryIndex();
+	if (newQueryIndex == UINT32_MAX)
+		return;
 
 	queryFragment qf{};
 	qf.queryIndex = newQueryIndex;
@@ -80,6 +84,11 @@ void LatteQueryObjectVk::begin()
 
 void LatteQueryObjectVk::endFragment()
 {
+	if (!m_hasActiveFragment || list_queryFragments.empty())
+	{
+		m_hasActiveFragment = false;
+		return;
+	}
 	m_rendererVk->draw_endRenderPass();
 
 	cemu_assert_debug(m_hasActiveFragment);
@@ -112,8 +121,18 @@ uint32 LatteQueryObjectVk::acquireQueryIndex()
 {
 	if (m_rendererVk->m_occlusionQueries.list_availableQueryIndices.empty())
 	{
+		m_rendererVk->ProcessFinishedCommandBuffers();
+		for (auto* activeQ : m_rendererVk->m_occlusionQueries.list_currentlyActiveQueries)
+		{
+			if (activeQ)
+				activeQ->handleFinishedFragments();
+		}
+	}
+	if (m_rendererVk->m_occlusionQueries.list_availableQueryIndices.empty())
+	{
 		cemuLog_log(LogType::Force, "Vulkan-Error: Exhausted query pool");
 		assert_dbg();
+		return UINT32_MAX;
 	}
 	uint32 queryIndex = m_rendererVk->m_occlusionQueries.list_availableQueryIndices.back();
 	m_rendererVk->m_occlusionQueries.list_availableQueryIndices.pop_back();
@@ -122,12 +141,14 @@ uint32 LatteQueryObjectVk::acquireQueryIndex()
 
 void LatteQueryObjectVk::releaseQueryIndex(uint32 queryIndex)
 {
-	m_rendererVk->m_occlusionQueries.list_availableQueryIndices.emplace_back(queryIndex);
+	if (queryIndex >= VulkanRenderer::OCCLUSION_QUERY_POOL_SIZE)
+		return;
+	if (std::find(m_rendererVk->m_occlusionQueries.list_availableQueryIndices.begin(), m_rendererVk->m_occlusionQueries.list_availableQueryIndices.end(), queryIndex) == m_rendererVk->m_occlusionQueries.list_availableQueryIndices.end())
+		m_rendererVk->m_occlusionQueries.list_availableQueryIndices.emplace_back(queryIndex);
 }
 
 void LatteQueryObjectVk::end()
 {
-	cemu_assert_debug(!list_queryFragments.empty());
 	if(m_hasActiveFragment)
 		endFragment();
 	m_vkQueryEnded = true;
@@ -170,20 +191,32 @@ LatteQueryObject* VulkanRenderer::occlusionQuery_create()
 	queryObjVk->queryEventStart = 0;
 	queryObjVk->queryEventEnd = 0;
 	queryObjVk->m_vkQueryEnded = false;
+	queryObjVk->m_hasActiveQuery = false;
+	queryObjVk->m_hasActiveFragment = false;
 	queryObjVk->m_acccumulatedSum = 0;
-	cemu_assert_debug(queryObjVk->list_queryFragments.empty()); // query fragment list should always be cleared in _destroy()
-	m_occlusionQueries.list_currentlyActiveQueries.emplace_back(queryObjVk);
+	for (auto& it : queryObjVk->list_queryFragments)
+		queryObjVk->releaseQueryIndex(it.queryIndex);
+	queryObjVk->list_queryFragments.clear();
+	if (std::find(m_occlusionQueries.list_currentlyActiveQueries.begin(), m_occlusionQueries.list_currentlyActiveQueries.end(), queryObjVk) == m_occlusionQueries.list_currentlyActiveQueries.end())
+		m_occlusionQueries.list_currentlyActiveQueries.emplace_back(queryObjVk);
 	return queryObjVk;
 }
 
 void VulkanRenderer::occlusionQuery_destroy(LatteQueryObject* queryObj)
 {
+	if (!queryObj)
+		return;
 	LatteQueryObjectVk* queryObjVk = static_cast<LatteQueryObjectVk*>(queryObj);
-	m_occlusionQueries.list_currentlyActiveQueries.erase(std::remove(m_occlusionQueries.list_currentlyActiveQueries.begin(), m_occlusionQueries.list_currentlyActiveQueries.end(), queryObj), m_occlusionQueries.list_currentlyActiveQueries.end());
-	m_occlusionQueries.list_cachedQueries.emplace_back(queryObjVk);
+	if (queryObjVk->m_hasActiveFragment)
+		queryObjVk->endFragment();
+	queryObjVk->m_hasActiveQuery = false;
+	queryObjVk->m_hasActiveFragment = false;
+	m_occlusionQueries.list_currentlyActiveQueries.erase(std::remove(m_occlusionQueries.list_currentlyActiveQueries.begin(), m_occlusionQueries.list_currentlyActiveQueries.end(), queryObjVk), m_occlusionQueries.list_currentlyActiveQueries.end());
 	for (auto& it : queryObjVk->list_queryFragments)
 		queryObjVk->releaseQueryIndex(it.queryIndex);
 	queryObjVk->list_queryFragments.clear();
+	if (std::find(m_occlusionQueries.list_cachedQueries.begin(), m_occlusionQueries.list_cachedQueries.end(), queryObjVk) == m_occlusionQueries.list_cachedQueries.end())
+		m_occlusionQueries.list_cachedQueries.emplace_back(queryObjVk);
 }
 
 void VulkanRenderer::occlusionQuery_flush()

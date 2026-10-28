@@ -54,7 +54,11 @@ LatteQueryObject* LatteQuery_createSamplePassedQuery()
 
 void LatteQuery_finishGX2Query(LatteGX2QueryInformation* gx2Query)
 {
+	if (gx2Query->queryMPTR == MPTR_NULL)
+		return;
 	uint32* queryObjectData = (uint32*)memory_getPointerFromVirtualOffset(gx2Query->queryMPTR);
+	if (!queryObjectData)
+		return;
 	*(uint64*)(queryObjectData + 0) = 0;
 	*(uint64*)(queryObjectData + 2) = gx2Query->sampleSum;
 	*(uint64*)(queryObjectData + 4) = 0;
@@ -73,17 +77,17 @@ void LatteQuery_UpdateFinishedQueries()
 		if( queryObject->queryEnded == false )
 			continue;
 		// check if result is available
-		uint64 numSamplesPassed;
+		uint64 numSamplesPassed = 0;
 		if (!queryObject->getResult(numSamplesPassed))
 			break;
 
-		cemu_assert_debug(latestQueryFinishedEventId < queryObject->queryEventEnd);
-		latestQueryFinishedEventId = queryObject->queryEventEnd;
+		if (latestQueryFinishedEventId < queryObject->queryEventEnd)
+			latestQueryFinishedEventId = queryObject->queryEventEnd;
 
 		// add number of passed samples to all gx2 queries that were active at the time
 		for (auto& it : list_activeGX2Queries2)
 		{
-			if (queryObject->queryEventStart >= it->queryEventStart && queryObject->queryEventEnd <= it->queryEventEnd)
+			if (queryObject->queryEventStart >= it->queryEventStart && (it->queryEventEnd == 0 || queryObject->queryEventEnd <= it->queryEventEnd))
 				it->sampleSum += numSamplesPassed;
 		}
 
@@ -92,7 +96,7 @@ void LatteQuery_UpdateFinishedQueries()
 		g_renderer->occlusionQuery_destroy(queryObject);
 	}
 	// check for finished GX2 queries
-	for (sint32 i = 0; i < list_activeGX2Queries2.size(); i++)
+	for (sint32 i = 0; i < (sint32)list_activeGX2Queries2.size(); i++)
 	{
 		auto gx2Query = list_activeGX2Queries2[i];
 		if (gx2Query->queryEnded && latestQueryFinishedEventId >= gx2Query->queryEventEnd)
@@ -105,15 +109,62 @@ void LatteQuery_UpdateFinishedQueries()
 	}
 }
 
+void LatteQuery_endActiveRendererQuery(uint64 currentEventId);
+
 void LatteQuery_UpdateFinishedQueriesForceFinishAll()
 {
-	cemu_assert_debug(_currentlyActiveRendererQuery == nullptr);
+	bool hadActiveQuery = (_currentlyActiveRendererQuery != nullptr);
+	if (hadActiveQuery)
+	{
+		LatteQuery_endActiveRendererQuery(LatteQuery_getNextEventId());
+	}
 	g_renderer->occlusionQuery_flush(); // guarantees that all query commands have been submitted and finished processing
-	while (true)
+	for (uint32 retry = 0; retry < 64; retry++)
 	{
 		LatteQuery_UpdateFinishedQueries();
 		if (list_queriesInFlight.empty())
 			break;
+	}
+	if (!list_queriesInFlight.empty())
+	{
+		for (auto* queryObject : list_queriesInFlight)
+		{
+			if (queryObject->queryEventEnd > latestQueryFinishedEventId)
+				latestQueryFinishedEventId = queryObject->queryEventEnd;
+			g_renderer->occlusionQuery_destroy(queryObject);
+		}
+		list_queriesInFlight.clear();
+		for (sint32 i = 0; i < (sint32)list_activeGX2Queries2.size(); i++)
+		{
+			auto gx2Query = list_activeGX2Queries2[i];
+			if (gx2Query->queryEnded)
+			{
+				LatteQuery_finishGX2Query(gx2Query);
+				free(gx2Query);
+				list_activeGX2Queries2.erase(list_activeGX2Queries2.begin() + i);
+				i--;
+			}
+		}
+	}
+	// If there are still un-ended GX2 occlusion queries, resume an active renderer query
+	bool hasActiveGX2Query = false;
+	for (auto& it : list_activeGX2Queries2)
+	{
+		if (!it->queryEnded)
+		{
+			hasActiveGX2Query = true;
+			break;
+		}
+	}
+	if (hasActiveGX2Query && _currentlyActiveRendererQuery == nullptr)
+	{
+		uint64 currentEventId = LatteQuery_getNextEventId();
+		LatteQueryObject* queryObject = LatteQuery_createSamplePassedQuery();
+		if (queryObject)
+		{
+			LatteQuery_begin(queryObject, currentEventId);
+			_currentlyActiveRendererQuery = queryObject;
+		}
 	}
 }
 
@@ -124,13 +175,16 @@ void LatteQuery_endActiveRendererQuery(uint64 currentEventId)
 	if (_currentlyActiveRendererQuery != nullptr)
 	{
 		LatteQuery_end(_currentlyActiveRendererQuery, currentEventId);
-		list_queriesInFlight.emplace_back(_currentlyActiveRendererQuery);
+		if (std::find(list_queriesInFlight.begin(), list_queriesInFlight.end(), _currentlyActiveRendererQuery) == list_queriesInFlight.end())
+			list_queriesInFlight.emplace_back(_currentlyActiveRendererQuery);
 		_currentlyActiveRendererQuery = nullptr;
 	}
 }
 
 void LatteQuery_BeginOcclusionQuery(MPTR queryMPTR)
 {
+	if (queryMPTR == MPTR_NULL)
+		return;
 	if (checkQueriesCounter < 7)
 	{
 		checkQueriesCounter++;
@@ -160,8 +214,11 @@ void LatteQuery_BeginOcclusionQuery(MPTR queryMPTR)
 	list_activeGX2Queries2.emplace_back(queryBinding);
 	// start renderer query
 	LatteQueryObject* queryObject = LatteQuery_createSamplePassedQuery();
-	LatteQuery_begin(queryObject, currentEventId);
-	_currentlyActiveRendererQuery = queryObject;
+	if (queryObject)
+	{
+		LatteQuery_begin(queryObject, currentEventId);
+		_currentlyActiveRendererQuery = queryObject;
+	}
 }
 
 void LatteQuery_EndOcclusionQuery(MPTR queryMPTR)
@@ -195,9 +252,11 @@ void LatteQuery_EndOcclusionQuery(MPTR queryMPTR)
 	if (hasActiveGX2Query)
 	{
 		LatteQueryObject* queryObject = LatteQuery_createSamplePassedQuery();
-		LatteQuery_begin(queryObject, currentEventId);
-		list_queriesInFlight.emplace_back(queryObject);
-		_currentlyActiveRendererQuery = queryObject;
+		if (queryObject)
+		{
+			LatteQuery_begin(queryObject, currentEventId);
+			_currentlyActiveRendererQuery = queryObject;
+		}
 		catchOpenGLError();
 	}
 }
@@ -209,4 +268,12 @@ void LatteQuery_CancelActiveGPU7Queries()
 
 void LatteQuery_Init()
 {
+	queryEventCounter = 1;
+	latestQueryFinishedEventId = 0;
+	checkQueriesCounter = 0;
+	_currentlyActiveRendererQuery = nullptr;
+	list_queriesInFlight.clear();
+	for (auto* gx2Query : list_activeGX2Queries2)
+		free(gx2Query);
+	list_activeGX2Queries2.clear();
 }

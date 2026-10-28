@@ -137,6 +137,37 @@ bool gameProfile_loadEnumOption(IniParser& iniParser, const char* optionName, T&
 	auto option_value = iniParser.FindOption(optionName);
 	if (!option_value)
 		return false;
+	if constexpr (std::is_same_v<T, AccurateShaderMulOption>)
+	{
+		if (boost::iequals(*option_value, "false") || boost::iequals(*option_value, "0"))
+		{
+			option = AccurateShaderMulOption::False;
+			return true;
+		}
+		if (boost::iequals(*option_value, "true") || boost::iequals(*option_value, "1"))
+		{
+			option = AccurateShaderMulOption::True;
+			return true;
+		}
+	}
+	else if constexpr (std::is_same_v<T, PrecompiledShaderOption>)
+	{
+		if (boost::iequals(*option_value, "auto"))
+		{
+			option = PrecompiledShaderOption::Auto;
+			return true;
+		}
+		if (boost::iequals(*option_value, "true") || boost::iequals(*option_value, "enable"))
+		{
+			option = PrecompiledShaderOption::Enable;
+			return true;
+		}
+		if (boost::iequals(*option_value, "false") || boost::iequals(*option_value, "disable"))
+		{
+			option = PrecompiledShaderOption::Disable;
+			return true;
+		}
+	}
 	for(const T& v : T())
 	{
 		// test integer option

@@ -15,6 +15,12 @@ void gx2Export_GX2InitColorBufferRegs(PPCInterpreter_t* hCPU)
 {
 	cemuLog_log(LogType::GX2, "GX2InitColorBufferRegs(0x{:08x})", hCPU->gpr[3]);
 	ppcDefineParamStructPtr(colorBuffer, GX2ColorBuffer, 0);
+	if (!colorBuffer)
+	{
+		osLib_returnFromFunction(hCPU, 0);
+		return;
+	}
+	GX2::_GX2CalcSurfaceSizeAndAlignmentWorkaround(&colorBuffer->surface);
 
 	LatteAddrLib::AddrSurfaceInfo_OUT surfaceInfo;
 	LatteAddrLib::GX2CalculateSurfaceInfo(colorBuffer->surface.format, colorBuffer->surface.width, colorBuffer->surface.height, colorBuffer->surface.depth, colorBuffer->surface.dim, colorBuffer->surface.tileMode, colorBuffer->surface.aa, _swapEndianU32(colorBuffer->viewMip), &surfaceInfo);
@@ -116,6 +122,12 @@ void gx2Export_GX2InitDepthBufferRegs(PPCInterpreter_t* hCPU)
 {
 	cemuLog_log(LogType::GX2, "GX2InitDepthBufferRegs(0x{:08x})", hCPU->gpr[3]);
 	ppcDefineParamStructPtr(depthBuffer, GX2DepthBuffer, 0);
+	if (!depthBuffer)
+	{
+		osLib_returnFromFunction(hCPU, 0);
+		return;
+	}
+	GX2::_GX2CalcSurfaceSizeAndAlignmentWorkaround(&depthBuffer->surface);
 
 	LatteAddrLib::AddrSurfaceInfo_OUT surfaceInfo;
 	LatteAddrLib::GX2CalculateSurfaceInfo(depthBuffer->surface.format, depthBuffer->surface.width, depthBuffer->surface.height, depthBuffer->surface.depth, depthBuffer->surface.dim, depthBuffer->surface.tileMode, depthBuffer->surface.aa, _swapEndianU32(depthBuffer->viewMip), &surfaceInfo);

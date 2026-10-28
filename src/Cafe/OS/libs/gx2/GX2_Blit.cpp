@@ -84,6 +84,12 @@ namespace GX2
 
 	void GX2ClearColor(GX2ColorBuffer* colorBuffer, float r, float g, float b, float a)
 	{
+		if (!colorBuffer || colorBuffer->surface.imagePtr == MPTR_NULL || colorBuffer->surface.imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR ||
+			colorBuffer->surface.width == 0 || colorBuffer->surface.height == 0 ||
+			colorBuffer->surface.width > 16384 || colorBuffer->surface.height > 16384)
+		{
+			return;
+		}
 		GX2ReserveCmdSpace(50);
 		if ((colorBuffer->surface.resFlag & GX2_RESFLAG_USAGE_COLOR_BUFFER) != 0)
 		{
@@ -120,6 +126,8 @@ namespace GX2
 
 	void GX2ClearBuffersEx(GX2ColorBuffer* colorBuffer, GX2DepthBuffer* depthBuffer, float r, float g, float b, float a, float depthClearValue, uint8 stencilClearValue, GX2ClearFlags clearFlags)
 	{
+		if (!colorBuffer || !depthBuffer)
+			return;
 		GX2ReserveCmdSpace(50);
 		_updateDepthStencilClearRegs(depthClearValue, stencilClearValue, clearFlags);
 
@@ -129,6 +137,21 @@ namespace GX2
 		if ((clearFlags & GX2ClearFlags::CLEAR_STENCIL) != 0)
 			hleClearFlags |= 4;
 		hleClearFlags |= 1;
+
+		if (colorBuffer->surface.imagePtr == MPTR_NULL || colorBuffer->surface.imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR ||
+			colorBuffer->surface.width == 0 || colorBuffer->surface.height == 0 ||
+			colorBuffer->surface.width > 16384 || colorBuffer->surface.height > 16384)
+		{
+			hleClearFlags &= ~1u;
+		}
+		if (depthBuffer->surface.imagePtr == MPTR_NULL || depthBuffer->surface.imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR ||
+			depthBuffer->surface.width == 0 || depthBuffer->surface.height == 0 ||
+			depthBuffer->surface.width > 16384 || depthBuffer->surface.height > 16384)
+		{
+			hleClearFlags &= ~(2u | 4u);
+		}
+		if (hleClearFlags == 0)
+			return;
 
 		// send command to clear color, depth and stencil
 		if (_swapEndianU32(colorBuffer->viewFirstSlice) != 0)
@@ -166,9 +189,11 @@ namespace GX2
 	{
 		GX2ReserveCmdSpace(50);
 
-		if (!depthBuffer && (depthBuffer->surface.width == 0 || depthBuffer->surface.height == 0))
+		if (!depthBuffer || depthBuffer->surface.imagePtr == MPTR_NULL || depthBuffer->surface.imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR ||
+			depthBuffer->surface.width == 0 || depthBuffer->surface.height == 0 ||
+			depthBuffer->surface.width > 16384 || depthBuffer->surface.height > 16384)
 		{
-			// Super Smash Bros tries to clear an uninitialized depth surface?
+			// Super Smash Bros / FFL tries to clear an uninitialized depth surface
 			debug_printf("GX2ClearDepthStencilEx(): Attempting to clear invalid depthbuffer\n");
 			return;
 		}

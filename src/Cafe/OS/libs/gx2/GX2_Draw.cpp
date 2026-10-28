@@ -14,14 +14,17 @@ namespace GX2
 {
 	void GX2SetAttribBuffer(uint32 bufferIndex, uint32 sizeInBytes, uint32 stride, void* data)
 	{
+		if (bufferIndex >= 16)
+			return;
 		GX2ReserveCmdSpace(9);
-		MPTR physicalAddress = memory_virtualToPhysical(memory_getVirtualOffsetFromPointer(data));
+		MPTR physicalAddress = data ? memory_virtualToPhysical(memory_getVirtualOffsetFromPointer(data)) : MPTR_NULL;
+		uint32 safeSizeField = (sizeInBytes > 0 && data != nullptr) ? (sizeInBytes - 1) : 0;
 		// write PM4 command
 		gx2WriteGather_submit(
 			pm4HeaderType3(IT_SET_RESOURCE, 8),
 			0x8C0 + bufferIndex * 7,
 			physicalAddress,
-			sizeInBytes - 1, // size
+			safeSizeField, // size
 			(stride & 0xFFFF) << 11, // stride
 			0, // ukn
 			0, // ukn
@@ -31,6 +34,8 @@ namespace GX2
 
 	void GX2DrawIndexedEx(GX2PrimitiveMode2 primitiveMode, uint32 count, GX2IndexType indexType, void* indexData, uint32 baseVertex, uint32 numInstances)
 	{
+		if (count == 0 || numInstances == 0 || indexData == nullptr)
+			return;
 		GX2ReserveCmdSpace(3 + 3 + 2 + 2 + 6);
 		gx2WriteGather_submit(
 			// IT_SET_CTL_CONST
@@ -57,6 +62,8 @@ namespace GX2
 
 	void GX2DrawIndexedEx2(GX2PrimitiveMode2 primitiveMode, uint32 count, GX2IndexType indexType, void* indexData, uint32 baseVertex, uint32 numInstances, uint32 baseInstance)
 	{
+		if (count == 0 || numInstances == 0 || indexData == nullptr)
+			return;
 		GX2ReserveCmdSpace(3 + 3 + 2 + 2 + 6);
 		gx2WriteGather_submit(
 			// IT_SET_CTL_CONST
@@ -90,6 +97,8 @@ namespace GX2
 
 	void GX2DrawEx(GX2PrimitiveMode2 primitiveMode, uint32 count, uint32 baseVertex, uint32 numInstances)
 	{
+		if (count == 0 || numInstances == 0)
+			return;
 		GX2ReserveCmdSpace(3 + 3 + 2 + 2 + 6);
 		gx2WriteGather_submit(
 			// IT_SET_CTL_CONST

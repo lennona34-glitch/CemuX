@@ -801,6 +801,13 @@ std::optional<GraphicPack2::PresetVar> GraphicPack2::GetPresetVariable(const std
 		return it->second;
 	}
 
+	for (const auto& preset : m_presets)
+	{
+		const auto fallbackIt = std::find_if(preset->variables.cbegin(), preset->variables.cend(), [&var_name](auto p) { return p.first == var_name; });
+		if (fallbackIt != preset->variables.cend())
+			return fallbackIt->second;
+	}
+
 	return {};
 }
 

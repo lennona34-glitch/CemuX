@@ -1951,7 +1951,12 @@ void VulkanRenderer::ProcessFinishedCommandBuffers()
 			cemuLog_log(LogType::Force, "vkGetFenceStatus returned unexpected error {} (suppressing further repeats)", (sint32)fenceStatus);
 		}
 		cemu_assert_debug(false);
+		ProcessDestructionQueue();
+		m_uniformVarBufferReadIndex = m_cmdBufferUniformRingbufIndices[m_commandBufferSyncIndex];
 		m_commandBufferSyncIndex = (m_commandBufferSyncIndex + 1) % m_commandBuffers.size();
+		memoryManager->cleanupBuffers(m_countCommandBufferFinished);
+		m_countCommandBufferFinished++;
+		finishedCmdBuffers = true;
 		break;
 	}
 	if (finishedCmdBuffers)
@@ -1962,7 +1967,11 @@ void VulkanRenderer::ProcessFinishedCommandBuffers()
 
 void VulkanRenderer::WaitForNextFinishedCommandBuffer()
 {
-	cemu_assert_debug(m_commandBufferSyncIndex != m_commandBufferIndex);
+	if (m_commandBufferSyncIndex == m_commandBufferIndex)
+	{
+		m_countCommandBufferFinished = m_numSubmittedCmdBuffers;
+		return;
+	}
 	// wait on least recently submitted command buffer
 	VkResult result = vkWaitForFences(m_logicalDevice, 1, &m_cmd_buffer_fences[m_commandBufferSyncIndex], true, UINT64_MAX);
 	if (result == VK_TIMEOUT)
@@ -1971,7 +1980,12 @@ void VulkanRenderer::WaitForNextFinishedCommandBuffer()
 	}
 	else if (result != VK_SUCCESS)
 	{
-		cemuLog_log(LogType::Force, "vkWaitForFences: Returned unhandled error {}", (sint32)result);
+		static bool s_loggedWaitFenceError = false;
+		if (!s_loggedWaitFenceError)
+		{
+			s_loggedWaitFenceError = true;
+			cemuLog_log(LogType::Force, "vkWaitForFences: Returned unhandled error {} (suppressing further repeats)", (sint32)result);
+		}
 	}
 	// process
 	ProcessFinishedCommandBuffers();

@@ -124,6 +124,7 @@ namespace GX2
 			(uint32)surface->height.value() == 0 || (uint32)surface->height.value() > 16384 ||
 			(uint32)surface->depth.value() == 0 || (uint32)surface->depth.value() > 2048 ||
 			(uint32)surface->format.value() == 0 || (uint32)surface->format.value() >= 0x1000 ||
+			Latte::GetFormatBits(surface->format) == 0 ||
 			(uint32)surface->tileMode.value() > 0x20)
 		{
 			static bool s_loggedUninitializedSurface = false;

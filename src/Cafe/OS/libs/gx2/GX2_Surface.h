@@ -76,6 +76,7 @@ namespace GX2
 	Latte::E_ENDIAN_SWAP GetSurfaceFormatSwapMode(Latte::E_GX2SURFFMT fmt);
 	uint32 GetSurfaceColorBufferExportFormat(Latte::E_GX2SURFFMT fmt);
 
+	void _GX2CalcSurfaceSizeAndAlignmentWorkaround(GX2Surface* surface);
 	void GX2CalcSurfaceSizeAndAlignment(GX2Surface* surface);
 
 	void GX2SurfaceInit();
