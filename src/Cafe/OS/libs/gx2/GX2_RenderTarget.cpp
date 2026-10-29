@@ -128,6 +128,15 @@ void gx2Export_GX2InitDepthBufferRegs(PPCInterpreter_t* hCPU)
 		return;
 	}
 	GX2::_GX2CalcSurfaceSizeAndAlignmentWorkaround(&depthBuffer->surface);
+	Latte::E_GX2SURFFMT dbFmt = depthBuffer->surface.format;
+	if (dbFmt != Latte::E_GX2SURFFMT::D16_UNORM &&
+		dbFmt != Latte::E_GX2SURFFMT::D24_S8_UNORM &&
+		dbFmt != Latte::E_GX2SURFFMT::D32_FLOAT &&
+		dbFmt != Latte::E_GX2SURFFMT::D32_S8_FLOAT &&
+		dbFmt != Latte::E_GX2SURFFMT::D24_S8_FLOAT)
+	{
+		depthBuffer->surface.format = Latte::E_GX2SURFFMT::D24_S8_UNORM;
+	}
 
 	LatteAddrLib::AddrSurfaceInfo_OUT surfaceInfo;
 	LatteAddrLib::GX2CalculateSurfaceInfo(depthBuffer->surface.format, depthBuffer->surface.width, depthBuffer->surface.height, depthBuffer->surface.depth, depthBuffer->surface.dim, depthBuffer->surface.tileMode, depthBuffer->surface.aa, _swapEndianU32(depthBuffer->viewMip), &surfaceInfo);
@@ -150,6 +159,15 @@ void gx2Export_GX2SetColorBuffer(PPCInterpreter_t* hCPU)
 	GX2ReserveCmdSpace(20);
 
 	GX2ColorBuffer* colorBufferBE = (GX2ColorBuffer*)memory_getPointerFromVirtualOffset(hCPU->gpr[3]);
+	if (!colorBufferBE || colorBufferBE->surface.imagePtr == MPTR_NULL || colorBufferBE->surface.imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR)
+	{
+		gx2WriteGather_submitU32AsBE(pm4HeaderType3(IT_SET_CONTEXT_REG, 2));
+		gx2WriteGather_submitU32AsBE(mmCB_COLOR0_BASE - 0xA000 + hCPU->gpr[4]);
+		gx2WriteGather_submitU32AsBE(0);
+		GX2::GX2WriteGather_checkAndInsertWrapAroundMark();
+		osLib_returnFromFunction(hCPU, 0);
+		return;
+	}
 
 #ifdef CEMU_DEBUG_ASSERT
 	cemuLog_log(LogType::GX2, "ColorBuffer tileMode {:01x} PhysAddr {:08x} fmt {:04x} res {}x{} Mip {} Slice {}", (uint32)colorBufferBE->surface.tileMode.value(), (uint32)colorBufferBE->surface.imagePtr, (uint32)colorBufferBE->surface.format.value(), (uint32)colorBufferBE->surface.width, (uint32)colorBufferBE->surface.height, _swapEndianU32(colorBufferBE->viewMip), _swapEndianU32(colorBufferBE->viewFirstSlice));
@@ -221,6 +239,17 @@ void gx2Export_GX2SetDepthBuffer(PPCInterpreter_t* hCPU)
 	GX2ReserveCmdSpace(20);
 
 	GX2DepthBuffer* depthBufferBE = (GX2DepthBuffer*)memory_getPointerFromVirtualOffset(hCPU->gpr[3]);
+	if (!depthBufferBE || depthBufferBE->surface.imagePtr == MPTR_NULL || depthBufferBE->surface.imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR)
+	{
+		gx2WriteGather_submitU32AsBE(pm4HeaderType3(IT_SET_CONTEXT_REG, 1+3));
+		gx2WriteGather_submitU32AsBE(mmDB_DEPTH_BASE - 0xA000);
+		gx2WriteGather_submitU32AsBE(0);
+		gx2WriteGather_submitU32AsBE(0);
+		gx2WriteGather_submitU32AsBE(0);
+		GX2::GX2WriteGather_checkAndInsertWrapAroundMark();
+		osLib_returnFromFunction(hCPU, 0);
+		return;
+	}
 
 	cemuLog_log(LogType::GX2, "DepthBuffer tileMode {:01x} PhysAddr {:08x} fmt {:04x} res {}x{}", (uint32)depthBufferBE->surface.tileMode.value(), (uint32)depthBufferBE->surface.imagePtr, (uint32)depthBufferBE->surface.format.value(), (uint32)depthBufferBE->surface.width, (uint32)depthBufferBE->surface.height);
 

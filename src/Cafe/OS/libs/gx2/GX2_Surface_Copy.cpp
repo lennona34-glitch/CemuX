@@ -149,6 +149,11 @@ void gx2SurfaceCopySoftware(
 
 void gx2Surface_GX2CopySurface(GX2Surface* srcSurface, uint32 srcMip, uint32 srcSlice, GX2Surface* dstSurface, uint32 dstMip, uint32 dstSlice)
 {
+	if (!srcSurface || !dstSurface)
+		return;
+	if (srcSurface->imagePtr == MPTR_NULL || srcSurface->imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR ||
+		dstSurface->imagePtr == MPTR_NULL || dstSurface->imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR)
+		return;
 	sint32 dstWidth = dstSurface->width;
 	sint32 dstHeight = dstSurface->height;
 	sint32 srcWidth = srcSurface->width;
@@ -177,14 +182,13 @@ void gx2Surface_GX2CopySurface(GX2Surface* srcSurface, uint32 srcMip, uint32 src
 	LatteAddrLib::AddrSurfaceInfo_OUT surfOutDst = {0};
 	GX2::GX2CalculateSurfaceInfo(dstSurface, dstMip, &surfOutDst);
 	// check parameters
-	if (srcSurface->numLevels == 0)
+	if (srcSurface->numLevels == 0 || dstSurface->numLevels == 0 || srcMip >= srcSurface->numLevels || dstMip >= dstSurface->numLevels)
 	{
-		debug_printf("GX2CopySurface(): mip count is 0\n");
+		debug_printf("GX2CopySurface(): invalid mip count or mip level\n");
 		return;
 	}
 	// get input pointer
 	uint8* inputData = NULL;
-	cemu_assert(srcMip < srcSurface->numLevels);
 	if( srcMip == 0 )
 		inputData = (uint8*)memory_getPointerFromVirtualOffset(srcSurface->imagePtr);
 	else if( srcMip == 1 )
@@ -195,7 +199,6 @@ void gx2Surface_GX2CopySurface(GX2Surface* srcSurface, uint32 srcMip, uint32 src
 	}
 	// get output pointer
 	uint8* outputData = NULL;
-	cemu_assert(dstMip < dstSurface->numLevels);
 	if( dstMip == 0 )
 		outputData = (uint8*)memory_getPointerFromVirtualOffset(dstSurface->imagePtr);
 	else if( dstMip == 1 )
@@ -204,6 +207,8 @@ void gx2Surface_GX2CopySurface(GX2Surface* srcSurface, uint32 srcMip, uint32 src
 	{
 		outputData = (uint8*)memory_getPointerFromVirtualOffset(dstSurface->mipPtr + dstSurface->mipOffset[dstMip - 1]);
 	}
+	if (!inputData || !outputData)
+		return;
 	
 	if( srcHwFormat != dstHwFormat )
 	{
@@ -433,8 +438,19 @@ void gx2Export_GX2ResolveAAColorBuffer(PPCInterpreter_t* hCPU)
 {
 	debug_printf("GX2ResolveAAColorBuffer(0x%08x,0x%08x,%d,%d)\n", hCPU->gpr[3], hCPU->gpr[4], hCPU->gpr[5], hCPU->gpr[6]);
 	GX2ColorBuffer* srcColorBuffer = (GX2ColorBuffer*)memory_getPointerFromVirtualOffset(hCPU->gpr[3]);
-	GX2Surface* srcSurface = &srcColorBuffer->surface;
 	GX2Surface* dstSurface = (GX2Surface*)memory_getPointerFromVirtualOffset(hCPU->gpr[4]);
+	if (!srcColorBuffer || !dstSurface)
+	{
+		osLib_returnFromFunction(hCPU, 0);
+		return;
+	}
+	GX2Surface* srcSurface = &srcColorBuffer->surface;
+	if (srcSurface->imagePtr == MPTR_NULL || srcSurface->imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR ||
+		dstSurface->imagePtr == MPTR_NULL || dstSurface->imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR)
+	{
+		osLib_returnFromFunction(hCPU, 0);
+		return;
+	}
 	uint32 srcMip = _swapEndianU32(srcColorBuffer->viewMip);
 	uint32 dstMip = hCPU->gpr[5];
 	uint32 srcSlice = _swapEndianU32(srcColorBuffer->viewFirstSlice);
@@ -484,9 +500,13 @@ void gx2Export_GX2ResolveAAColorBuffer(PPCInterpreter_t* hCPU)
 	GX2::GX2CalculateSurfaceInfo(srcSurface, srcMip, &surfOutSrc);
 	LatteAddrLib::AddrSurfaceInfo_OUT surfOutDst = {0};
 	GX2::GX2CalculateSurfaceInfo(dstSurface, dstMip, &surfOutDst);
+	if (srcSurface->numLevels == 0 || dstSurface->numLevels == 0 || srcMip >= srcSurface->numLevels || dstMip >= dstSurface->numLevels)
+	{
+		osLib_returnFromFunction(hCPU, 0);
+		return;
+	}
 	// get input pointer
 	uint8* inputData = NULL;
-	cemu_assert(srcMip < srcSurface->numLevels);
 	if( srcMip == 0 )
 		inputData = (uint8*)memory_getPointerFromVirtualOffset(srcSurface->imagePtr);
 	else if( srcMip == 1 )
@@ -495,7 +515,6 @@ void gx2Export_GX2ResolveAAColorBuffer(PPCInterpreter_t* hCPU)
 		inputData = (uint8*)memory_getPointerFromVirtualOffset(srcSurface->mipPtr+srcSurface->mipOffset[srcMip-1]);
 	// get output pointer
 	uint8* outputData = NULL;
-	cemu_assert(dstMip < dstSurface->numLevels);
 	if( dstMip == 0 )
 		outputData = (uint8*)memory_getPointerFromVirtualOffset(dstSurface->imagePtr);
 	else if( dstMip == 1 )
@@ -579,11 +598,16 @@ void gx2Export_GX2ConvertDepthBufferToTextureSurface(PPCInterpreter_t* hCPU)
 	cemuLog_log(LogType::GX2, "GX2ConvertDepthBufferToTextureSurface(0x{:x}, 0x{:x}, {}, {})", hCPU->gpr[3], hCPU->gpr[4], hCPU->gpr[5], hCPU->gpr[6]);
 	GX2DepthBuffer* depthBuffer = (GX2DepthBuffer*)memory_getPointerFromVirtualOffset(hCPU->gpr[3]);
 	GX2Surface* dstSurface = (GX2Surface*)memory_getPointerFromVirtualOffset(hCPU->gpr[4]);
+	if (!depthBuffer || !dstSurface ||
+		depthBuffer->surface.imagePtr == MPTR_NULL || depthBuffer->surface.imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR ||
+		dstSurface->imagePtr == MPTR_NULL || dstSurface->imagePtr == MEMORY_TILINGAPERTURE_AREA_ADDR)
+	{
+		osLib_returnFromFunction(hCPU, 0);
+		return;
+	}
 	uint32 dstMip = hCPU->gpr[5];
 	uint32 dstSlice = hCPU->gpr[6];
 
-	if (dstMip != 0 || dstSlice != 0)
-		debugBreakpoint();
 	// get texture info
 	LatteAddrLib::AddrSurfaceInfo_OUT surfOutSrc = { 0 };
 	GX2::GX2CalculateSurfaceInfo(&depthBuffer->surface, 0, &surfOutSrc);
@@ -593,8 +617,6 @@ void gx2Export_GX2ConvertDepthBufferToTextureSurface(PPCInterpreter_t* hCPU)
 	if (depthBuffer->surface.imagePtr == dstSurface->imagePtr)
 	{
 		// in-place re-tiling doesn't need any actual copy operation?
-		if (dstMip != 0 || dstSlice != 0)
-			debugBreakpoint();
 		debug_printf("In-place re-tiling\n");
 		osLib_returnFromFunction(hCPU, 0);
 		return;

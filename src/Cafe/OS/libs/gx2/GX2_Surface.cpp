@@ -144,7 +144,7 @@ namespace GX2
 			surface->imagePtr = MEMORY_TILINGAPERTURE_AREA_ADDR;
 			surface->swizzle = 0;
 			surface->aa = 0;
-			surface->format = Latte::E_GX2SURFFMT::R8_G8_B8_A8_UNORM;
+			surface->format = (surface->resFlag & GX2_RESFLAG_USAGE_DEPTH_BUFFER) ? Latte::E_GX2SURFFMT::D24_S8_UNORM : Latte::E_GX2SURFFMT::R8_G8_B8_A8_UNORM;
 			surface->alignment = 0x400;
 		}
 	}

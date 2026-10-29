@@ -127,6 +127,11 @@ uint32 LatteQueryObjectVk::acquireQueryIndex()
 			if (activeQ)
 				activeQ->handleFinishedFragments();
 		}
+		for (auto* cachedQ : m_rendererVk->m_occlusionQueries.list_cachedQueries)
+		{
+			if (cachedQ)
+				cachedQ->handleFinishedFragments();
+		}
 	}
 	if (m_rendererVk->m_occlusionQueries.list_availableQueryIndices.empty())
 	{
@@ -178,14 +183,19 @@ LatteQueryObject* VulkanRenderer::occlusionQuery_create()
 		}
 	}
 	LatteQueryObjectVk* queryObjVk = nullptr;
-	if (m_occlusionQueries.list_cachedQueries.empty())
+	if (!m_occlusionQueries.list_cachedQueries.empty())
+	{
+		auto* candidate = m_occlusionQueries.list_cachedQueries.front();
+		candidate->handleFinishedFragments();
+		if (candidate->list_queryFragments.empty())
+		{
+			queryObjVk = candidate;
+			m_occlusionQueries.list_cachedQueries.erase(m_occlusionQueries.list_cachedQueries.begin());
+		}
+	}
+	if (!queryObjVk)
 	{
 		queryObjVk = new LatteQueryObjectVk(this);
-	}
-	else
-	{
-		queryObjVk = m_occlusionQueries.list_cachedQueries.front();
-		m_occlusionQueries.list_cachedQueries.erase(m_occlusionQueries.list_cachedQueries.begin()+0);
 	}
 	queryObjVk->queryEnded = false;
 	queryObjVk->queryEventStart = 0;
@@ -194,9 +204,6 @@ LatteQueryObject* VulkanRenderer::occlusionQuery_create()
 	queryObjVk->m_hasActiveQuery = false;
 	queryObjVk->m_hasActiveFragment = false;
 	queryObjVk->m_acccumulatedSum = 0;
-	for (auto& it : queryObjVk->list_queryFragments)
-		queryObjVk->releaseQueryIndex(it.queryIndex);
-	queryObjVk->list_queryFragments.clear();
 	if (std::find(m_occlusionQueries.list_currentlyActiveQueries.begin(), m_occlusionQueries.list_currentlyActiveQueries.end(), queryObjVk) == m_occlusionQueries.list_currentlyActiveQueries.end())
 		m_occlusionQueries.list_currentlyActiveQueries.emplace_back(queryObjVk);
 	return queryObjVk;
@@ -212,9 +219,7 @@ void VulkanRenderer::occlusionQuery_destroy(LatteQueryObject* queryObj)
 	queryObjVk->m_hasActiveQuery = false;
 	queryObjVk->m_hasActiveFragment = false;
 	m_occlusionQueries.list_currentlyActiveQueries.erase(std::remove(m_occlusionQueries.list_currentlyActiveQueries.begin(), m_occlusionQueries.list_currentlyActiveQueries.end(), queryObjVk), m_occlusionQueries.list_currentlyActiveQueries.end());
-	for (auto& it : queryObjVk->list_queryFragments)
-		queryObjVk->releaseQueryIndex(it.queryIndex);
-	queryObjVk->list_queryFragments.clear();
+	queryObjVk->handleFinishedFragments();
 	if (std::find(m_occlusionQueries.list_cachedQueries.begin(), m_occlusionQueries.list_cachedQueries.end(), queryObjVk) == m_occlusionQueries.list_cachedQueries.end())
 		m_occlusionQueries.list_cachedQueries.emplace_back(queryObjVk);
 }

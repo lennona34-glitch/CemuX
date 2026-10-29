@@ -113,17 +113,28 @@ void LatteQuery_endActiveRendererQuery(uint64 currentEventId);
 
 void LatteQuery_UpdateFinishedQueriesForceFinishAll()
 {
-	bool hadActiveQuery = (_currentlyActiveRendererQuery != nullptr);
-	if (hadActiveQuery)
+	uint64 currentEventId = LatteQuery_getNextEventId();
+	for (auto* gx2Query : list_activeGX2Queries2)
 	{
-		LatteQuery_endActiveRendererQuery(LatteQuery_getNextEventId());
+		if (!gx2Query->queryEnded)
+		{
+			gx2Query->queryEventEnd = currentEventId;
+			gx2Query->queryEnded = true;
+		}
 	}
-	g_renderer->occlusionQuery_flush(); // guarantees that all query commands have been submitted and finished processing
-	for (uint32 retry = 0; retry < 64; retry++)
+	if (_currentlyActiveRendererQuery != nullptr)
 	{
-		LatteQuery_UpdateFinishedQueries();
-		if (list_queriesInFlight.empty())
-			break;
+		LatteQuery_endActiveRendererQuery(currentEventId);
+	}
+	if (!list_queriesInFlight.empty())
+	{
+		g_renderer->occlusionQuery_flush(); // guarantees that all query commands have been submitted and finished processing
+		for (uint32 retry = 0; retry < 64; retry++)
+		{
+			LatteQuery_UpdateFinishedQueries();
+			if (list_queriesInFlight.empty())
+				break;
+		}
 	}
 	if (!list_queriesInFlight.empty())
 	{
@@ -134,38 +145,13 @@ void LatteQuery_UpdateFinishedQueriesForceFinishAll()
 			g_renderer->occlusionQuery_destroy(queryObject);
 		}
 		list_queriesInFlight.clear();
-		for (sint32 i = 0; i < (sint32)list_activeGX2Queries2.size(); i++)
-		{
-			auto gx2Query = list_activeGX2Queries2[i];
-			if (gx2Query->queryEnded)
-			{
-				LatteQuery_finishGX2Query(gx2Query);
-				free(gx2Query);
-				list_activeGX2Queries2.erase(list_activeGX2Queries2.begin() + i);
-				i--;
-			}
-		}
 	}
-	// If there are still un-ended GX2 occlusion queries, resume an active renderer query
-	bool hasActiveGX2Query = false;
-	for (auto& it : list_activeGX2Queries2)
+	for (auto* gx2Query : list_activeGX2Queries2)
 	{
-		if (!it->queryEnded)
-		{
-			hasActiveGX2Query = true;
-			break;
-		}
+		LatteQuery_finishGX2Query(gx2Query);
+		free(gx2Query);
 	}
-	if (hasActiveGX2Query && _currentlyActiveRendererQuery == nullptr)
-	{
-		uint64 currentEventId = LatteQuery_getNextEventId();
-		LatteQueryObject* queryObject = LatteQuery_createSamplePassedQuery();
-		if (queryObject)
-		{
-			LatteQuery_begin(queryObject, currentEventId);
-			_currentlyActiveRendererQuery = queryObject;
-		}
-	}
+	list_activeGX2Queries2.clear();
 }
 
 sint32 checkQueriesCounter = 0;
@@ -195,12 +181,14 @@ void LatteQuery_BeginOcclusionQuery(MPTR queryMPTR)
 		checkQueriesCounter = 0;
 	}
 
-	for(auto& it : list_activeGX2Queries2)
+	for (sint32 i = 0; i < (sint32)list_activeGX2Queries2.size(); i++)
 	{
-		if (it->queryMPTR == queryMPTR)
+		if (list_activeGX2Queries2[i]->queryMPTR == queryMPTR)
 		{
-			debug_printf("itHLEBeginOcclusionQuery: Query 0x%08x is already active\n", queryMPTR);
-			return;
+			debug_printf("itHLEBeginOcclusionQuery: Query 0x%08x is already active, replacing previous instance\n", queryMPTR);
+			free(list_activeGX2Queries2[i]);
+			list_activeGX2Queries2.erase(list_activeGX2Queries2.begin() + i);
+			i--;
 		}
 	}
 	uint64 currentEventId = LatteQuery_getNextEventId();
@@ -263,7 +251,28 @@ void LatteQuery_EndOcclusionQuery(MPTR queryMPTR)
 
 void LatteQuery_CancelActiveGPU7Queries()
 {
-	cemu_assert_debug(_currentlyActiveRendererQuery == nullptr);
+	bool hasUnended = (_currentlyActiveRendererQuery != nullptr);
+	for (auto* gx2Query : list_activeGX2Queries2)
+	{
+		if (!gx2Query->queryEnded)
+		{
+			hasUnended = true;
+			break;
+		}
+	}
+	if (hasUnended)
+	{
+		uint64 currentEventId = LatteQuery_getNextEventId();
+		for (auto* gx2Query : list_activeGX2Queries2)
+		{
+			if (!gx2Query->queryEnded)
+			{
+				gx2Query->queryEventEnd = currentEventId;
+				gx2Query->queryEnded = true;
+			}
+		}
+		LatteQuery_endActiveRendererQuery(currentEventId);
+	}
 }
 
 void LatteQuery_Init()

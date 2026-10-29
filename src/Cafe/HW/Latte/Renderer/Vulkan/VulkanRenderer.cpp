@@ -473,11 +473,8 @@ VulkanRenderer::VulkanRenderer()
 	deviceFeatures.occlusionQueryPrecise = VK_TRUE;
 	deviceFeatures.depthClamp = VK_TRUE;
 	deviceFeatures.depthBiasClamp = VK_TRUE;
-	if (m_vendor == GfxVendor::AMD)
-	{
-		deviceFeatures.robustBufferAccess = VK_TRUE;
-		cemuLog_log(LogType::Force, "Enable robust buffer access");
-	}
+	deviceFeatures.robustBufferAccess = VK_TRUE;
+	cemuLog_log(LogType::Force, "Enable robust buffer access");
 	if (m_featureControl.mode.useTFEmulationViaSSBO)
 	{
 		deviceFeatures.vertexPipelineStoresAndAtomics = true;
@@ -3687,7 +3684,7 @@ void VulkanRenderer::bufferCache_init(const sint32 bufferSize)
 		}
 	}
 	if(!m_useHostMemoryForCache)
-		memoryManager->CreateBuffer(bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 0, m_bufferCache, m_bufferCacheMemory);
+		memoryManager->CreateBuffer(bufferSize + 65536, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 0, m_bufferCache, m_bufferCacheMemory);
 }
 
 void VulkanRenderer::bufferCache_upload(uint8* buffer, sint32 size, uint32 bufferOffset)
