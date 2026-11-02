@@ -57,7 +57,21 @@ Pre-2.0 releases can be found on Cemu's [changelog page](https://cemu.info/chang
 
 ## Build Instructions
 
-To compile Cemu yourself on Windows, Linux or macOS, view [BUILD.md](/BUILD.md).
+### Fast 1-Click Build on Windows (No vcpkg / NuGet setup required!)
+
+To compile CemuX on Windows in under 2 minutes without dealing with vcpkg package errors or NuGet credentials:
+
+1. Clone the repository with submodules:
+   ```cmd
+   git clone --recursive https://github.com/lennona34-glitch/CemuX.git
+   cd CemuX
+   ```
+2. Simply double-click **`build.bat`** (or run `build.bat` in CMD / Terminal).
+   - Automatically discovers your Visual Studio 2022 installation (Community, Professional, Enterprise, or Build Tools).
+   - Automatically verifies git submodules and staged dependencies.
+   - Rapidly compiles all components in parallel and links **`bin\CemuX.exe`** ready to play!
+
+For standard CMake instructions or building on Linux / macOS, see [BUILD.md](file:///C:/Users/adria/.gemini/antigravity/scratch/Cemu-2.6/BUILD.md).
 
 ## Issues
 

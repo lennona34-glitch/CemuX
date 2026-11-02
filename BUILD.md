@@ -24,20 +24,36 @@
 
 ## Windows
 
+### Option 1: Fast 1-Click Build (Recommended)
+
+Prerequisites:
+- Git
+- Visual Studio 2022 (Community, Professional, Enterprise, or C++ Build Tools) with "Desktop development with C++" and Windows 10/11 SDK.
+
+Steps:
+1. Clone the repository recursively:
+   ```cmd
+   git clone --recursive https://github.com/lennona34-glitch/CemuX.git
+   cd CemuX
+   ```
+2. Double-click **`build.bat`** (or execute `build.bat` in CMD / PowerShell).
+   - The build script discovers your Visual Studio tools automatically.
+   - It stages and compiles all dependencies in parallel with zero reliance on private NuGet feeds.
+   - Outputs the ready-to-use emulator binary to `bin\CemuX.exe` in ~2 minutes!
+
+### Option 2: Visual Studio 2022 / CMake
+
 Prerequisites:
 - git
 - A recent version of Visual Studio 2022 with the following additional components:
    - C++ CMake tools for Windows
    - Windows 10/11 SDK
 
-Instructions for Visual Studio 2022:
-
-1. Run `git clone --recursive https://github.com/cemu-project/Cemu`
-2. Open the newly created Cemu directory in Visual Studio using the "Open a local folder" option
-3. In the menu select Project -> Configure CMake. Wait until it is done, this may take a long time
-4. You can now build, run and debug Cemu
-
-Any other IDE should also work as long as it has CMake and MSVC support. CLion and Visual Studio Code have been confirmed to work.
+Instructions:
+1. Run `git clone --recursive https://github.com/lennona34-glitch/CemuX.git`
+2. Open the directory in Visual Studio using the "Open a local folder" option
+3. In the menu select Project -> Configure CMake. Wait until it is done
+4. You can now build, run and debug CemuX
 
 ## Linux
 
