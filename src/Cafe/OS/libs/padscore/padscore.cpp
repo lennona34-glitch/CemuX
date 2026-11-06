@@ -6,6 +6,7 @@
 #include "Cafe/OS/libs/coreinit/coreinit_Alarm.h"
 #include "Cafe/OS/libs/coreinit/coreinit_SystemInfo.h"
 #include "input/InputManager.h"
+#include "gui/QuestVRWindow.h"
 
 // KPAD
 
@@ -447,6 +448,27 @@ sint32 _KPADRead(uint32 channel, KPADStatus_t* samplingBufs, uint32 length, bety
 	const auto controller = InputManager::instance().get_wpad_controller(channel);
 	if (!controller)
 	{
+		uint32 qBtns = 0;
+		float qLX = 0.0f, qLY = 0.0f, qRX = 0.0f, qRY = 0.0f;
+		if (QuestVRWindow::GetQuestInput(static_cast<int>(channel), qBtns, qLX, qLY, qRX, qRY))
+		{
+			memset(samplingBufs, 0x00, sizeof(KPADStatus_t));
+			samplingBufs->wpadErr = WPAD_ERR_NONE;
+			samplingBufs->data_format = kDataFormat_URCC;
+			samplingBufs->devType = kWAPDevURCC;
+			uint32 wpadBtns = QuestVRWindow::ConvertVpadToWpadButtons(qBtns);
+			samplingBufs->ex_status.uc.hold = wpadBtns;
+			samplingBufs->ex_status.uc.lstick.x = qLX;
+			samplingBufs->ex_status.uc.lstick.y = qLY;
+			samplingBufs->ex_status.uc.rstick.x = qRX;
+			samplingBufs->ex_status.uc.rstick.y = qRY;
+			samplingBufs->ex_status.uc.charge = FALSE;
+			samplingBufs->ex_status.uc.cable = TRUE;
+			if (errResult)
+				*errResult = KPAD_ERROR::NONE;
+			return 1;
+		}
+
 		if (errResult)
 			*errResult = KPAD_ERROR::NO_CONTROLLER;
 

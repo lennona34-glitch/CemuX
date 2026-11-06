@@ -7,6 +7,7 @@
 #include "config/ActiveSettings.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Alarm.h"
 #include "input/InputManager.h"
+#include "gui/QuestVRWindow.h"
 
 #ifdef PUBLIC_RELASE
 #define vpadbreak() 
@@ -241,6 +242,23 @@ namespace vpad
 		const auto controller = InputManager::instance().get_vpad_controller(channel);
 		if (!controller)
 		{
+			if (channel == 0 && length > 0)
+			{
+				uint32 qButtons = 0;
+				float qLX = 0.0f, qLY = 0.0f, qRX = 0.0f, qRY = 0.0f;
+				if (QuestVRWindow::GetQuestInput(0, qButtons, qLX, qLY, qRX, qRY))
+				{
+					status->vpadErr = 0;
+					status->hold = qButtons;
+					status->leftStick.x = qLX;
+					status->leftStick.y = qLY;
+					status->rightStick.x = qRX;
+					status->rightStick.y = qRY;
+					if (error)
+						*error = VPAD_READ_ERR_NONE;
+					return 1;
+				}
+			}
 			// most games expect the Wii U GamePad to be connected, so even if the user has not set it up we should still return empty samples for channel 0
 			if(channel != 0)
 			{

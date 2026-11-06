@@ -4,16 +4,19 @@
 #include "gui/MainWindow.h"
 #include "gui/input/InputSettings2.h"
 #include "input/InputManager.h"
+#include "input/emulated/WPADController.h"
 #include "config/CemuConfig.h"
 #include "Cafe/CafeSystem.h"
 
 #include <wx/clipbrd.h>
+#include <wx/msgdlg.h>
 #include <wx/statbox.h>
 #include <wx/statline.h>
 #include <wx/utils.h>
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -56,6 +59,19 @@ namespace
 		std::atomic<uint64_t> totalFramesServed{0};
 		std::atomic<int> lastCaptureW{0};
 		std::atomic<int> lastCaptureH{0};
+		std::atomic<bool> adbForwardActive{false};
+
+		struct QuestInputState
+		{
+			std::atomic<uint32_t> buttons{0};
+			std::atomic<float> stickLX{0.0f};
+			std::atomic<float> stickLY{0.0f};
+			std::atomic<float> stickRX{0.0f};
+			std::atomic<float> stickRY{0.0f};
+			std::atomic<uint64_t> lastTimestampMs{0};
+		};
+
+		QuestInputState questInput[2]{};
 
 		std::mutex frameMutex;
 		std::vector<uint8_t> latestJpeg;
@@ -136,7 +152,76 @@ namespace
 
 		std::string GetBroadcastUrl()
 		{
+			if (adbForwardActive.load())
+				return fmt::format("http://localhost:{}", port.load());
 			return fmt::format("http://{}:{}", DetectLanIp(), port.load());
+		}
+
+		void ParseAndApplyQuestInput(const std::string& req)
+		{
+			auto qPos = req.find('?');
+			if (qPos == std::string::npos)
+				return;
+			auto lineEnd = req.find("\r\n", qPos);
+			std::string query = (lineEnd != std::string::npos) ? req.substr(qPos + 1, lineEnd - qPos - 1) : req.substr(qPos + 1);
+			auto spPos = query.find(' ');
+			if (spPos != std::string::npos)
+				query = query.substr(0, spPos);
+
+			int p = (targetSource.load() == 1 || targetSource.load() == 3) ? 1 : 0;
+			uint32_t btn = 0;
+			float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
+			bool hasInput = false;
+
+			std::stringstream ss(query);
+			std::string pair;
+			while (std::getline(ss, pair, '&'))
+			{
+				auto eq = pair.find('=');
+				if (eq == std::string::npos)
+					continue;
+				std::string k = pair.substr(0, eq);
+				std::string v = pair.substr(eq + 1);
+				if (k == "p")
+					p = std::clamp(std::atoi(v.c_str()), 0, 1);
+				else if (k == "btn")
+				{
+					btn = static_cast<uint32_t>(std::strtoul(v.c_str(), nullptr, 0));
+					hasInput = true;
+				}
+				else if (k == "lx")
+				{
+					lx = std::strtof(v.c_str(), nullptr);
+					hasInput = true;
+				}
+				else if (k == "ly")
+				{
+					ly = std::strtof(v.c_str(), nullptr);
+					hasInput = true;
+				}
+				else if (k == "rx")
+				{
+					rx = std::strtof(v.c_str(), nullptr);
+					hasInput = true;
+				}
+				else if (k == "ry")
+				{
+					ry = std::strtof(v.c_str(), nullptr);
+					hasInput = true;
+				}
+			}
+
+			if (hasInput && p >= 0 && p < 2)
+			{
+				uint64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+				questInput[p].buttons.store(btn);
+				questInput[p].stickLX.store(std::clamp(lx, -1.0f, 1.0f));
+				questInput[p].stickLY.store(std::clamp(ly, -1.0f, 1.0f));
+				questInput[p].stickRX.store(std::clamp(rx, -1.0f, 1.0f));
+				questInput[p].stickRY.store(std::clamp(ry, -1.0f, 1.0f));
+				questInput[p].lastTimestampMs.store(nowMs);
+			}
 		}
 
 #if BOOST_OS_WINDOWS
@@ -175,8 +260,12 @@ namespace
 			Gdiplus::GdiplusStartupInput gdiplusStartupInput;
 			Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
 
-			CLSID jpegClsid{};
-			GetJpegEncoderClsid(jpegClsid);
+			CLSID clsidJpeg{};
+			if (!GetJpegEncoderClsid(clsidJpeg))
+			{
+				Gdiplus::GdiplusShutdown(gdiplusToken);
+				return;
+			}
 
 			while (running.load())
 			{
@@ -187,7 +276,7 @@ namespace
 				if (srcMode == 1)
 				{
 					hwndTarget = reinterpret_cast<HWND>(padHwnd.load());
-					if (!hwndTarget || !IsWindow(hwndTarget) || !IsWindowVisible(hwndTarget))
+					if (!hwndTarget || !IsWindow(hwndTarget))
 						hwndTarget = reinterpret_cast<HWND>(mainHwnd.load());
 				}
 				else
@@ -199,91 +288,88 @@ namespace
 				{
 					RECT rc{};
 					GetClientRect(hwndTarget, &rc);
-					int srcW = rc.right - rc.left;
-					int srcH = rc.bottom - rc.top;
+					const int clientW = rc.right - rc.left;
+					const int clientH = rc.bottom - rc.top;
 
-					if (srcW >= 64 && srcH >= 64 && !IsIconic(hwndTarget))
+					if (clientW > 64 && clientH > 64)
 					{
-						int cropX = 0;
-						int cropW = srcW;
-						if (srcMode == 2) // Left half (P1 Split)
-						{
-							cropX = 0;
-							cropW = srcW / 2;
-						}
-						else if (srcMode == 3) // Right half (P2 Split)
-						{
-							cropX = srcW / 2;
-							cropW = srcW - cropX;
-						}
-
-						// Cap output resolution to 1920x1080 for ultra-low latency 60fps streaming
-						int outW = cropW;
-						int outH = srcH;
-						if (outW > 1920)
-						{
-							outH = (outH * 1920) / outW;
-							outW = 1920;
-						}
-						outW = std::max(64, outW & ~1);
-						outH = std::max(64, outH & ~1);
-
 						HDC hdcWin = GetDC(hwndTarget);
 						if (hdcWin)
 						{
 							HDC hdcFull = CreateCompatibleDC(hdcWin);
-							HBITMAP hbmFull = CreateCompatibleBitmap(hdcWin, srcW, srcH);
+							HBITMAP hbmFull = CreateCompatibleBitmap(hdcWin, clientW, clientH);
 							HGDIOBJ oldFull = SelectObject(hdcFull, hbmFull);
 
-							BOOL ok = PrintWindow(hwndTarget, hdcFull, PW_RENDERFULLCONTENT | PW_CLIENTONLY);
-							if (!ok)
-								ok = BitBlt(hdcFull, 0, 0, srcW, srcH, hdcWin, 0, 0, SRCCOPY);
+							BOOL prOk = PrintWindow(hwndTarget, hdcFull, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
+							if (!prOk)
+								BitBlt(hdcFull, 0, 0, clientW, clientH, hdcWin, 0, 0, SRCCOPY);
 
-							HBITMAP hbmToEncode = hbmFull;
-							HDC hdcScaled = nullptr;
-							HBITMAP hbmScaled = nullptr;
-							HGDIOBJ oldScaled = nullptr;
-
-							if (cropX != 0 || cropW != srcW || outW != srcW || outH != srcH)
+							int cropX = 0, cropY = 0, cropW = clientW, cropH = clientH;
+							if (srcMode == 2)
 							{
-								hdcScaled = CreateCompatibleDC(hdcWin);
-								hbmScaled = CreateCompatibleBitmap(hdcWin, outW, outH);
-								oldScaled = SelectObject(hdcScaled, hbmScaled);
-								SetStretchBltMode(hdcScaled, HALFTONE);
-								StretchBlt(hdcScaled, 0, 0, outW, outH, hdcFull, cropX, 0, cropW, srcH, SRCCOPY);
-								hbmToEncode = hbmScaled;
+								// Player 1: Left half of split-screen
+								cropX = 0;
+								cropY = 0;
+								cropW = std::max(32, clientW / 2);
+								cropH = clientH;
+							}
+							else if (srcMode == 3)
+							{
+								// Player 2: Right half of split-screen
+								cropX = clientW / 2;
+								cropY = 0;
+								cropW = std::max(32, clientW - cropX);
+								cropH = clientH;
 							}
 
+							// Limit output resolution to 1920 max edge for high stream performance
+							int outW = cropW;
+							int outH = cropH;
+							if (outW > 1920)
 							{
-								Gdiplus::Bitmap bmp(hbmToEncode, nullptr);
-								IStream* memStream = nullptr;
-								if (CreateStreamOnHGlobal(nullptr, TRUE, &memStream) == S_OK && memStream)
-								{
-									ULONG qual = static_cast<ULONG>(std::clamp(jpegQuality.load(), 40, 100));
-									Gdiplus::EncoderParameters encParams{};
-									encParams.Count = 1;
-									encParams.Parameter[0].Guid = Gdiplus::EncoderQuality;
-									encParams.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
-									encParams.Parameter[0].NumberOfValues = 1;
-									encParams.Parameter[0].Value = &qual;
+								outH = (outH * 1920) / outW;
+								outW = 1920;
+							}
 
-									if (bmp.Save(memStream, &jpegClsid, &encParams) == Gdiplus::Ok)
+							HDC hdcScaled = CreateCompatibleDC(hdcWin);
+							HBITMAP hbmScaled = CreateCompatibleBitmap(hdcWin, outW, outH);
+							HGDIOBJ oldScaled = SelectObject(hdcScaled, hbmScaled);
+
+							SetStretchBltMode(hdcScaled, HALFTONE);
+							StretchBlt(hdcScaled, 0, 0, outW, outH, hdcFull, cropX, cropY, cropW, cropH, SRCCOPY);
+
+							{
+								auto* bmp = new Gdiplus::Bitmap(hbmScaled, nullptr);
+								if (bmp && bmp->GetLastStatus() == Gdiplus::Ok)
+								{
+									IStream* stream = nullptr;
+									if (CreateStreamOnHGlobal(nullptr, TRUE, &stream) == S_OK)
 									{
-										HGLOBAL hMem = nullptr;
-										if (GetHGlobalFromStream(memStream, &hMem) == S_OK && hMem)
+										Gdiplus::EncoderParameters encoderParameters{};
+										encoderParameters.Count = 1;
+										encoderParameters.Parameter[0].Guid = Gdiplus::EncoderQuality;
+										encoderParameters.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
+										encoderParameters.Parameter[0].NumberOfValues = 1;
+										ULONG quality = std::clamp(jpegQuality.load(), 40, 100);
+										encoderParameters.Parameter[0].Value = &quality;
+
+										bmp->Save(stream, &clsidJpeg, &encoderParameters);
+
+										STATSTG stat{};
+										if (stream->Stat(&stat, STATFLAG_NONAME) == S_OK)
 										{
-											const SIZE_T bytes = GlobalSize(hMem);
-											const void* ptr = GlobalLock(hMem);
-											if (ptr && bytes > 0)
+											const size_t sz = static_cast<size_t>(stat.cbSize.QuadPart);
+											if (sz > 0)
 											{
-												std::vector<uint8_t> encoded(
-													 static_cast<const uint8_t*>(ptr),
-													 static_cast<const uint8_t*>(ptr) + bytes);
-												GlobalUnlock(hMem);
+												std::vector<uint8_t> compressed(sz);
+												LARGE_INTEGER zero{};
+												stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+												ULONG bytesRead = 0;
+												stream->Read(compressed.data(), static_cast<ULONG>(sz), &bytesRead);
 
 												{
 													std::lock_guard<std::mutex> lk(frameMutex);
-													latestJpeg = std::move(encoded);
+													latestJpeg = std::move(compressed);
 													++latestSeq;
 												}
 												++totalFramesCaptured;
@@ -291,20 +377,20 @@ namespace
 												lastCaptureH.store(outH);
 											}
 										}
+										stream->Release();
 									}
-									memStream->Release();
 								}
+								delete bmp;
 							}
 
-							if (hdcScaled)
-							{
-								SelectObject(hdcScaled, oldScaled);
-								DeleteObject(hbmScaled);
-								DeleteDC(hdcScaled);
-							}
+							SelectObject(hdcScaled, oldScaled);
+							DeleteObject(hbmScaled);
+							DeleteDC(hdcScaled);
+
 							SelectObject(hdcFull, oldFull);
 							DeleteObject(hbmFull);
 							DeleteDC(hdcFull);
+
 							ReleaseDC(hwndTarget, hdcWin);
 						}
 					}
@@ -328,6 +414,7 @@ namespace
 			const int defMode = defaultXrMode.load();
 			const std::string playerBadge = (srcMode == 1 || srcMode == 3) ? "PLAYER 2 (Quest Headset)" : "PLAYER 1 (Quest Headset)";
 			const std::string modeHint = (defMode == 0) ? "immersive-ar" : "immersive-vr";
+			const int targetPlayerIdx = (srcMode == 1 || srcMode == 3) ? 1 : 0;
 
 			std::ostringstream h;
 			h << R"HTML(<!DOCTYPE html>
@@ -344,7 +431,7 @@ body{background:#090b10;color:#eef2ff;font-family:system-ui,-apple-system,Segoe 
 .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#00d2ff,#3a7bd5);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px;color:#fff;box-shadow:0 0 14px rgba(0,210,255,0.45)}
 .title{font-weight:800;font-size:17px;letter-spacing:0.4px}
 .badge{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;background:#1d2842;color:#67e8f9;border:1px solid #2dd4bf}
-.ctrl-badge{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;background:#1e293b;color:#94a3b8;border:1px solid #475569}
+.ctrl-badge{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;background:#1e293b;color:#94a3b8;border:1px solid #475569;transition:all 0.2s}
 .ctrl-badge.ok{background:#064e3b;color:#6ee7b7;border-color:#10b981}
 .actions{display:flex;gap:10px;flex-wrap:wrap}
 button{cursor:pointer;border:none;border-radius:10px;padding:10px 16px;font-weight:700;font-size:14px;color:#fff;transition:transform 0.12s,filter 0.12s}
@@ -355,7 +442,8 @@ button:active{transform:scale(0.96)}
 #stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;background:#000}
 #screen2d{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain}
 #xrCanvas{display:none;width:100%;height:100%}
-#overlayTip{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,0.85);border:1px solid #334155;padding:7px 16px;border-radius:999px;font-size:13px;color:#cbd5e1;pointer-events:none}
+#overlayTip{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,0.88);border:1px solid #334155;padding:8px 18px;border-radius:999px;font-size:13px;color:#cbd5e1;pointer-events:none;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,0.6)}
+#webxrNotice{display:none;position:absolute;top:65px;left:50%;transform:translateX(-50%);max-width:680px;width:90%;background:rgba(69,26,3,0.94);border:1px solid #f59e0b;color:#fef3c7;padding:12px 18px;border-radius:12px;font-size:13px;line-height:1.5;box-shadow:0 8px 30px rgba(0,0,0,0.6);z-index:50}
 </style>
 </head>
 <body>
@@ -367,18 +455,26 @@ button:active{transform:scale(0.96)}
       <div style="font-size:11px;color:#94a3b8" id="statsText">Connecting to CemuX stream...</div>
     </div>
     <span class="badge">)HTML" << playerBadge << R"HTML(</span>
-    <span class="ctrl-badge" id="padBadge">🎮 Sync Wireless Controller</span>
+    <span class="ctrl-badge" id="padBadge">🎮 Controller Listening...</span>
   </div>
   <div class="actions">
     <button class="btn-mr" id="btnMR">🌐 Mixed Reality (Passthrough)</button>
     <button class="btn-vr" id="btnVR">🥽 Full-Screen Immersive VR</button>
-    <button class="btn-fs" id="btnFS">🖥️ 2D Fullscreen</button>
+    <button class="btn-fs" id="btnFS">🖥️ 2D Fullscreen Cinema</button>
   </div>
 </div>
 <div id="stage">
   <img id="screen2d" alt="CemuX Live Broadcast"/>
   <canvas id="xrCanvas"></canvas>
-  <div id="overlayTip">In VR/MR: Thumbstick Up/Down = Screen Size • Thumbstick Left/Right = Distance • A/X Button = Recenter</div>
+  <div id="webxrNotice">
+    <div style="font-weight:800;font-size:14px;color:#fbbf24;margin-bottom:4px">⚠️ Meta Quest Browser WebXR Secure Context Notice</div>
+    Meta Quest Browser requires a <strong>Secure Context</strong> for WebXR. If entering Mixed Reality or VR fails:<br/>
+    • <strong>1-Click Fix via USB / Wireless ADB:</strong> In CemuX click <strong>'⚡ 1-Click Fix WebXR via ADB'</strong> to open <code>http://localhost:8765</code> (works instantly!).<br/>
+    • <strong>Wi-Fi Setup:</strong> Open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, enable it, add this URL, and click Relaunch.<br/>
+    • <strong>Play Now:</strong> Click <strong>🖥️ 2D Fullscreen Cinema</strong> to play in the headset browser immediately with full controller support!
+    <div style="text-align:right;margin-top:6px"><button onclick="document.getElementById('webxrNotice').style.display='none'" style="padding:4px 12px;background:#b45309;font-size:12px">Dismiss</button></div>
+  </div>
+  <div id="overlayTip">🎮 Controls: Sticks = Move & Look • Triggers = ZL/ZR • Grips = L/R • A/B/X/Y = Action Buttons • Hold Both Grips + Stick = Adjust Screen • A+B = Recenter</div>
 </div>
 <script>
 const img2d = document.getElementById('screen2d');
@@ -386,6 +482,7 @@ const statsText = document.getElementById('statsText');
 const padBadge = document.getElementById('padBadge');
 const xrCanvas = document.getElementById('xrCanvas');
 const defaultMode = ")HTML" << modeHint << R"HTML(";
+const playerIndex = )HTML" << targetPlayerIdx << R"HTML(;
 
 let frameCount = 0;
 let lastFpsTime = performance.now();
@@ -404,6 +501,164 @@ let screenDist = 2.4;
 let screenHeightOffset = 0.05;
 let yawOffset = 0.0;
 let needRecenter = true;
+
+// Controller and Gamepad Input State
+let curButtons = 0;
+let curLX = 0.0, curLY = 0.0, curRX = 0.0, curRY = 0.0;
+let lastSentButtons = 0;
+let lastSentLX = 0.0, lastSentLY = 0.0, lastSentRX = 0.0, lastSentRY = 0.0;
+let lastInputSentTime = 0;
+
+// Wii U VPAD bit definitions
+const VPAD_A = 0x8000;
+const VPAD_B = 0x4000;
+const VPAD_X = 0x2000;
+const VPAD_Y = 0x1000;
+const VPAD_L = 0x0020;
+const VPAD_R = 0x0010;
+const VPAD_ZL = 0x0080;
+const VPAD_ZR = 0x0040;
+const VPAD_PLUS = 0x0008;
+const VPAD_MINUS = 0x0004;
+const VPAD_HOME = 0x0002;
+const VPAD_UP = 0x0200;
+const VPAD_DOWN = 0x0100;
+const VPAD_LEFT = 0x0800;
+const VPAD_RIGHT = 0x0400;
+const VPAD_STICK_L = 0x00040000;
+const VPAD_STICK_R = 0x00020000;
+
+function pollControllers() {
+  let btns = 0;
+  let lx = 0.0, ly = 0.0, rx = 0.0, ry = 0.0;
+  let hasActivePad = false;
+  let padDesc = "";
+
+  // 1. Standard HTML5 Gamepad API (Bluetooth gamepads paired to Quest or PC)
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (let i = 0; i < pads.length; i++) {
+    const p = pads[i];
+    if (!p || !p.connected) continue;
+    hasActivePad = true;
+    padDesc = p.id || "Bluetooth Gamepad";
+
+    if (p.buttons[0]?.pressed) btns |= VPAD_B;
+    if (p.buttons[1]?.pressed) btns |= VPAD_A;
+    if (p.buttons[2]?.pressed) btns |= VPAD_Y;
+    if (p.buttons[3]?.pressed) btns |= VPAD_X;
+    if (p.buttons[4]?.pressed) btns |= VPAD_L;
+    if (p.buttons[5]?.pressed) btns |= VPAD_R;
+    if (p.buttons[6]?.pressed || (p.buttons[6]?.value > 0.2)) btns |= VPAD_ZL;
+    if (p.buttons[7]?.pressed || (p.buttons[7]?.value > 0.2)) btns |= VPAD_ZR;
+    if (p.buttons[8]?.pressed) btns |= VPAD_MINUS;
+    if (p.buttons[9]?.pressed) btns |= VPAD_PLUS;
+    if (p.buttons[10]?.pressed) btns |= VPAD_STICK_L;
+    if (p.buttons[11]?.pressed) btns |= VPAD_STICK_R;
+    if (p.buttons[12]?.pressed) btns |= VPAD_UP;
+    if (p.buttons[13]?.pressed) btns |= VPAD_DOWN;
+    if (p.buttons[14]?.pressed) btns |= VPAD_LEFT;
+    if (p.buttons[15]?.pressed) btns |= VPAD_RIGHT;
+    if (p.buttons[16]?.pressed) btns |= VPAD_HOME;
+
+    if (p.axes.length >= 2) {
+      if (Math.abs(p.axes[0]) > 0.12) lx = p.axes[0];
+      if (Math.abs(p.axes[1]) > 0.12) ly = -p.axes[1]; // Invert so Up is positive
+    }
+    if (p.axes.length >= 4) {
+      if (Math.abs(p.axes[2]) > 0.12) rx = p.axes[2];
+      if (Math.abs(p.axes[3]) > 0.12) ry = -p.axes[3]; // Invert so Up is positive
+    }
+    break;
+  }
+
+  // 2. Meta Quest Touch Controllers in WebXR
+  if (xrSession && xrSession.inputSources) {
+    let leftGrip = false, rightGrip = false;
+    for (const src of xrSession.inputSources) {
+      const g = src.gamepad;
+      if (!g) continue;
+      if (src.handedness === 'left' && (g.buttons[1]?.pressed || g.buttons[1]?.value > 0.5)) leftGrip = true;
+      if (src.handedness === 'right' && (g.buttons[1]?.pressed || g.buttons[1]?.value > 0.5)) rightGrip = true;
+    }
+    const isAdjusting = leftGrip && rightGrip;
+
+    for (const src of xrSession.inputSources) {
+      const g = src.gamepad;
+      if (!g) continue;
+      hasActivePad = true;
+      if (!padDesc) padDesc = "Quest Touch Controllers";
+
+      if (src.handedness === 'left') {
+        if (g.buttons[0]?.pressed || g.buttons[0]?.value > 0.2) btns |= VPAD_ZL;
+        if (!isAdjusting && (g.buttons[1]?.pressed || g.buttons[1]?.value > 0.2)) btns |= VPAD_L;
+        if (g.buttons[3]?.pressed) btns |= VPAD_STICK_L;
+        if (g.buttons[4]?.pressed) btns |= VPAD_X;
+        if (g.buttons[5]?.pressed) btns |= VPAD_Y;
+
+        const ax = (g.axes.length >= 4) ? g.axes[2] : g.axes[0];
+        const ay = (g.axes.length >= 4) ? g.axes[3] : g.axes[1];
+        if (isAdjusting) {
+          if (Math.abs(ay) > 0.2) screenWidth = Math.max(1.2, Math.min(6.5, screenWidth - ay * 0.03));
+          if (Math.abs(ax) > 0.2) screenDist  = Math.max(1.2, Math.min(5.5, screenDist  + ax * 0.03));
+        } else {
+          if (Math.abs(ax) > 0.12) lx = ax;
+          if (Math.abs(ay) > 0.12) ly = -ay;
+        }
+      } else if (src.handedness === 'right') {
+        if (g.buttons[0]?.pressed || g.buttons[0]?.value > 0.2) btns |= VPAD_ZR;
+        if (!isAdjusting && (g.buttons[1]?.pressed || g.buttons[1]?.value > 0.2)) btns |= VPAD_R;
+        if (g.buttons[3]?.pressed) btns |= VPAD_STICK_R;
+        if (g.buttons[4]?.pressed) btns |= VPAD_A;
+        if (g.buttons[5]?.pressed) btns |= VPAD_B;
+
+        // A + B pressed simultaneously on right controller recenters
+        if (g.buttons[4]?.pressed && g.buttons[5]?.pressed) {
+          needRecenter = true;
+        }
+
+        const ax = (g.axes.length >= 4) ? g.axes[2] : g.axes[0];
+        const ay = (g.axes.length >= 4) ? g.axes[3] : g.axes[1];
+        if (isAdjusting) {
+          if (Math.abs(ax) > 0.2) screenDist = Math.max(1.2, Math.min(5.5, screenDist + ax * 0.03));
+        } else {
+          if (Math.abs(ax) > 0.12) rx = ax;
+          if (Math.abs(ay) > 0.12) ry = -ay;
+        }
+      }
+    }
+  }
+
+  curButtons = btns;
+  curLX = lx; curLY = ly;
+  curRX = rx; curRY = ry;
+
+  // Update UI badge
+  if (hasActivePad) {
+    padBadge.classList.add('ok');
+    const actionText = (btns !== 0 || Math.abs(lx) > 0.2 || Math.abs(ly) > 0.2) ? " (Sending Input)" : " (Connected)";
+    padBadge.textContent = "🎮 " + (padDesc.length > 22 ? padDesc.substr(0, 20) + ".." : padDesc) + actionText;
+  } else {
+    padBadge.classList.remove('ok');
+    padBadge.textContent = "🎮 Sync Wireless Controller (Quest/PC)";
+  }
+
+  // Fast transmission if changed or periodically every 50ms
+  const now = performance.now();
+  const changed = (curButtons !== lastSentButtons) ||
+                  (Math.abs(curLX - lastSentLX) > 0.04) ||
+                  (Math.abs(curLY - lastSentLY) > 0.04) ||
+                  (Math.abs(curRX - lastSentRX) > 0.04) ||
+                  (Math.abs(curRY - lastSentRY) > 0.04);
+  if (changed || (now - lastInputSentTime >= 50 && hasActivePad)) {
+    lastSentButtons = curButtons;
+    lastSentLX = curLX; lastSentLY = curLY;
+    lastSentRX = curRX; lastSentRY = curRY;
+    lastInputSentTime = now;
+    const url = `/input?p=${playerIndex}&btn=${curButtons}&lx=${curLX.toFixed(3)}&ly=${curLY.toFixed(3)}&rx=${curRX.toFixed(3)}&ry=${curRY.toFixed(3)}`;
+    fetch(url, { method: 'GET', keepalive: true, cache: 'no-store' }).catch(() => {});
+  }
+}
+setInterval(pollControllers, 16);
 
 function pollFrame() {
   if (loadingFrame) return;
@@ -431,28 +686,9 @@ function pollFrame() {
     loadingFrame = false;
     setTimeout(pollFrame, 120);
   };
-  nextImg.src = `/frame.jpg?t=${ performance.now() }`;
+  nextImg.src = `/frame.jpg?t=${ performance.now() }&p=${playerIndex}&btn=${curButtons}&lx=${curLX.toFixed(3)}&ly=${curLY.toFixed(3)}&rx=${curRX.toFixed(3)}&ry=${curRY.toFixed(3)}`;
 }
 pollFrame();
-
-function checkGamepads() {
-  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-  let activeName = "";
-  for (let i = 0; i < pads.length; i++) {
-    if (pads[i] && pads[i].connected) {
-      activeName = pads[i].id;
-      break;
-    }
-  }
-  if (activeName) {
-    padBadge.textContent = "🎮 Controller Ready";
-    padBadge.classList.add("ok");
-  } else {
-    padBadge.textContent = "🎮 Wireless Controller (PC / Quest)";
-    padBadge.classList.remove("ok");
-  }
-}
-setInterval(checkGamepads, 1000);
 
 document.getElementById('btnFS').onclick = () => {
   const el = document.getElementById('stage');
@@ -539,8 +775,8 @@ function initWebGL() {
 
 async function startXR(mode) {
   if (!navigator.xr) {
-    alert("WebXR is only available inside the Meta Quest Browser (open this URL on your Quest headset). Using Fullscreen Theatre mode on this device.");
-    document.getElementById('stage').requestFullscreen();
+    document.getElementById('webxrNotice').style.display = 'block';
+    alert("WebXR is not available in this context (insecure origin or not inside Meta Quest Browser).\n\nPlease check the instructions banner at the top, or click '2D Fullscreen Cinema' below to play right now!");
     return;
   }
   if (xrSession) {
@@ -565,7 +801,8 @@ async function startXR(mode) {
     const isAR = (mode === 'immersive-ar');
     xrSession.requestAnimationFrame((t, frame) => onXRFrame(t, frame, isAR));
   } catch (e) {
-    alert("Could not start WebXR session: " + e.message);
+    document.getElementById('webxrNotice').style.display = 'block';
+    alert("Could not start WebXR session: " + e.message + "\n\nTip: You can use 1-Click ADB Fix in CemuX to forward localhost, or play in 2D Fullscreen Cinema mode!");
   }
 }
 
@@ -575,19 +812,7 @@ function onXRFrame(time, frame, isAR) {
   const pose = frame.getViewerPose(refSpace);
   if (!pose) return;
 
-  // Read Quest Touch / Gamepad thumbsticks in XR session to resize/move/recenter the screen
-  for (const src of session.inputSources) {
-    if (src.gamepad) {
-      const axes = src.gamepad.axes;
-      if (axes.length >= 4) {
-        if (Math.abs(axes[3]) > 0.2) screenWidth = Math.max(1.2, Math.min(6.5, screenWidth - axes[3] * 0.03));
-        if (Math.abs(axes[2]) > 0.2) screenDist  = Math.max(1.2, Math.min(5.5, screenDist  + axes[2] * 0.03));
-      }
-      if (src.gamepad.buttons[0] && src.gamepad.buttons[0].pressed) {
-        needRecenter = true;
-      }
-    }
-  }
+  pollControllers();
 
   if (needRecenter) {
     const q = pose.transform.orientation;
@@ -661,8 +886,32 @@ document.getElementById('btnVR').onclick = () => startXR('immersive-vr');
 			}
 			std::string req(reqBuf, recvd);
 
-			if (req.rfind("GET /frame.jpg", 0) == 0)
+			if (req.rfind("OPTIONS ", 0) == 0)
 			{
+				const char* preflight =
+					"HTTP/1.1 204 No Content\r\n"
+					"Access-Control-Allow-Origin: *\r\n"
+					"Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+					"Access-Control-Allow-Headers: *\r\n"
+					"Connection: close\r\n\r\n";
+				send(clientSock, preflight, static_cast<int>(strlen(preflight)), 0);
+			}
+			else if (req.rfind("GET /input", 0) == 0)
+			{
+				ParseAndApplyQuestInput(req);
+				const char* resp =
+					"HTTP/1.1 200 OK\r\n"
+					"Content-Type: application/json\r\n"
+					"Content-Length: 11\r\n"
+					"Access-Control-Allow-Origin: *\r\n"
+					"Cache-Control: no-store, no-cache\r\n"
+					"Connection: close\r\n\r\n"
+					"{\"ok\":true}";
+				send(clientSock, resp, static_cast<int>(strlen(resp)), 0);
+			}
+			else if (req.rfind("GET /frame.jpg", 0) == 0)
+			{
+				ParseAndApplyQuestInput(req);
 				std::vector<uint8_t> jpegCopy;
 				uint64_t seq = 0;
 				{
@@ -833,9 +1082,191 @@ void QuestVRWindow::ShutdownBroadcast()
 	QuestBroadcastService::Instance().Stop();
 }
 
+void QuestVRWindow::SetQuestInput(int player, uint32_t buttons, float lx, float ly, float rx, float ry)
+{
+	auto& svc = QuestBroadcastService::Instance();
+	if (player < 0 || player >= 2)
+		return;
+	uint64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	svc.questInput[player].buttons.store(buttons);
+	svc.questInput[player].stickLX.store(std::clamp(lx, -1.0f, 1.0f));
+	svc.questInput[player].stickLY.store(std::clamp(ly, -1.0f, 1.0f));
+	svc.questInput[player].stickRX.store(std::clamp(rx, -1.0f, 1.0f));
+	svc.questInput[player].stickRY.store(std::clamp(ry, -1.0f, 1.0f));
+	svc.questInput[player].lastTimestampMs.store(nowMs);
+}
+
+bool QuestVRWindow::GetQuestInput(int player, uint32_t& buttons, float& lx, float& ly, float& rx, float& ry)
+{
+	auto& svc = QuestBroadcastService::Instance();
+	if (player < 0 || player >= 2)
+		return false;
+	uint64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	uint64_t last = svc.questInput[player].lastTimestampMs.load();
+	if (last == 0 || (nowMs - last) > 1000)
+		return false;
+
+	buttons = svc.questInput[player].buttons.load();
+	lx = svc.questInput[player].stickLX.load();
+	ly = svc.questInput[player].stickLY.load();
+	rx = svc.questInput[player].stickRX.load();
+	ry = svc.questInput[player].stickRY.load();
+	return true;
+}
+
+bool QuestVRWindow::HasRecentQuestInput(int player)
+{
+	auto& svc = QuestBroadcastService::Instance();
+	if (player < 0 || player >= 2)
+		return false;
+	uint64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	uint64_t last = svc.questInput[player].lastTimestampMs.load();
+	return (last > 0 && (nowMs - last) <= 1000);
+}
+
+uint32_t QuestVRWindow::ConvertVpadToWpadButtons(uint32_t vpad)
+{
+	uint32_t w = 0;
+	if (vpad & 0x0200) w |= kProButton_Up;
+	if (vpad & 0x0100) w |= kProButton_Down;
+	if (vpad & 0x0800) w |= kProButton_Left;
+	if (vpad & 0x0400) w |= kProButton_Right;
+	if (vpad & 0x8000) w |= kProButton_A;
+	if (vpad & 0x4000) w |= kProButton_B;
+	if (vpad & 0x2000) w |= kProButton_X;
+	if (vpad & 0x1000) w |= kProButton_Y;
+	if (vpad & 0x0020) w |= kProButton_L;
+	if (vpad & 0x0010) w |= kProButton_R;
+	if (vpad & 0x0080) w |= kProButton_ZL;
+	if (vpad & 0x0040) w |= kProButton_ZR;
+	if (vpad & 0x0008) w |= kProButton_Plus;
+	if (vpad & 0x0004) w |= kProButton_Minus;
+	if (vpad & 0x0002) w |= kProButton_Home;
+	if (vpad & 0x00040000) w |= kProButton_StickL;
+	if (vpad & 0x00020000) w |= kProButton_StickR;
+	return w;
+}
+
+std::string QuestVRWindow::FindAdbExecutable()
+{
+	static const char* s_knownPaths[] = {
+		"C:\\adb\\platform-tools\\adb.exe",
+		"C:\\platform-tools\\adb.exe",
+		"C:\\adb\\adb.exe",
+	};
+	for (const char* p : s_knownPaths)
+	{
+		std::error_code ec;
+		if (std::filesystem::exists(p, ec))
+			return p;
+	}
+
+#if BOOST_OS_WINDOWS
+	char localApp[MAX_PATH]{};
+	if (GetEnvironmentVariableA("LOCALAPPDATA", localApp, MAX_PATH) > 0)
+	{
+		std::string p = std::string(localApp) + "\\Android\\Sdk\\platform-tools\\adb.exe";
+		std::error_code ec;
+		if (std::filesystem::exists(p, ec))
+			return p;
+	}
+
+	char appData[MAX_PATH]{};
+	if (GetEnvironmentVariableA("APPDATA", appData, MAX_PATH) > 0)
+	{
+		std::string p = std::string(appData) + "\\SideQuest\\platform-tools\\adb.exe";
+		std::error_code ec;
+		if (std::filesystem::exists(p, ec))
+			return p;
+	}
+
+	char found[MAX_PATH]{};
+	if (SearchPathA(nullptr, "adb.exe", nullptr, MAX_PATH, found, nullptr) > 0)
+	{
+		return found;
+	}
+#endif
+
+	return {};
+}
+
+bool QuestVRWindow::RunAdbCommand(const std::string& args, std::string* output)
+{
+#if BOOST_OS_WINDOWS
+	std::string adbPath = FindAdbExecutable();
+	if (adbPath.empty())
+	{
+		if (output)
+			*output = "adb.exe not found on system";
+		return false;
+	}
+
+	std::string cmd = "\"" + adbPath + "\" " + args;
+
+	SECURITY_ATTRIBUTES sa{};
+	sa.nLength = sizeof(sa);
+	sa.bInheritHandle = TRUE;
+
+	HANDLE hReadPipe = NULL;
+	HANDLE hWritePipe = NULL;
+	if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0))
+		return false;
+	SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+	STARTUPINFOA si{};
+	si.cb = sizeof(si);
+	si.dwFlags |= STARTF_USESTDHANDLES;
+	si.hStdOutput = hWritePipe;
+	si.hStdError = hWritePipe;
+
+	PROCESS_INFORMATION pi{};
+	std::vector<char> cmdBuf(cmd.begin(), cmd.end());
+	cmdBuf.push_back('\0');
+
+	BOOL ok = CreateProcessA(
+		nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+		CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+
+	CloseHandle(hWritePipe);
+
+	if (!ok)
+	{
+		CloseHandle(hReadPipe);
+		if (output)
+			*output = "Failed to launch adb process";
+		return false;
+	}
+
+	std::string outStr;
+	char buffer[512];
+	DWORD bytesRead = 0;
+	while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) && bytesRead > 0)
+	{
+		buffer[bytesRead] = '\0';
+		outStr += buffer;
+	}
+	CloseHandle(hReadPipe);
+
+	WaitForSingleObject(pi.hProcess, 5000);
+	DWORD exitCode = 1;
+	GetExitCodeProcess(pi.hProcess, &exitCode);
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+
+	if (output)
+		*output = outStr;
+	return (exitCode == 0);
+#else
+	return false;
+#endif
+}
+
 QuestVRWindow::QuestVRWindow(wxWindow* parent)
 	: wxDialog(parent, wxID_ANY, _("Quest VR & Mixed Reality Broadcast Studio (Player 1 / Player 2)"),
-			   wxDefaultPosition, wxSize(680, 560), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+			   wxDefaultPosition, wxSize(740, 620), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 {
 	auto& svc = QuestBroadcastService::Instance();
 
@@ -846,8 +1277,8 @@ QuestVRWindow::QuestVRWindow(wxWindow* parent)
 	auto* introText = new wxStaticText(
 		headerBox->GetStaticBox(), wxID_ANY,
 		_("Stream CemuX directly to a Meta Quest headset over local Wi-Fi in either Mixed Reality Passthrough "
-		  "(floating screen in your room) or Full-Screen Immersive VR Cinema — for either Player 1 or Player 2!"));
-	introText->Wrap(620);
+		  "(floating screen in your room) or Full-Screen Immersive VR Cinema - for either Player 1 or Player 2!"));
+	introText->Wrap(680);
 	headerBox->Add(introText, 0, wxALL | wxEXPAND, 6);
 	rootSizer->Add(headerBox, 0, wxALL | wxEXPAND, 8);
 
@@ -864,16 +1295,16 @@ QuestVRWindow::QuestVRWindow(wxWindow* parent)
 	rootSizer->Add(ctrlBox, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
 	// 2. Player & Viewing Mode Settings
-	auto* cfgBox = new wxStaticBoxSizer(wxVERTICAL, this, _("Step 2: Choose Target Player & Quest VR / Mixed Reality Mode"));
+	auto* cfgBox = new wxStaticBoxSizer(wxVERTICAL, this, _("Step 2: Choose Target Player && Quest VR / Mixed Reality Mode"));
 	auto* grid = new wxFlexGridSizer(4, 2, 8, 12);
 	grid->AddGrowableCol(1, 1);
 
 	grid->Add(new wxStaticText(cfgBox->GetStaticBox(), wxID_ANY, _("Broadcast Target:")), 0, wxALIGN_CENTER_VERTICAL);
 	wxArrayString playerOpts;
-	playerOpts.Add(_("Player 1 — Main TV Display (Full Screen)"));
-	playerOpts.Add(_("Player 2 — Separate GamePad View (DRC Co-op Screen)"));
-	playerOpts.Add(_("Player 1 — Left Half of Split-Screen"));
-	playerOpts.Add(_("Player 2 — Right Half of Split-Screen"));
+	playerOpts.Add(_("Player 1 - Main TV Display (Full Screen)"));
+	playerOpts.Add(_("Player 2 - Separate GamePad View (DRC Co-op Screen)"));
+	playerOpts.Add(_("Player 1 - Left Half of Split-Screen"));
+	playerOpts.Add(_("Player 2 - Right Half of Split-Screen"));
 	m_playerChoice = new wxChoice(cfgBox->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, playerOpts);
 	m_playerChoice->SetSelection(svc.targetSource.load());
 	m_playerChoice->Bind(wxEVT_CHOICE, &QuestVRWindow::OnSettingsChanged, this);
@@ -900,9 +1331,9 @@ QuestVRWindow::QuestVRWindow(wxWindow* parent)
 
 	grid->Add(new wxStaticText(cfgBox->GetStaticBox(), wxID_ANY, _("Stream Picture Quality:")), 0, wxALIGN_CENTER_VERTICAL);
 	wxArrayString qualOpts;
-	qualOpts.Add(_("85% — Crisp & Low Latency (Recommended)"));
-	qualOpts.Add(_("95% — Maximum Visual Fidelity (5GHz / Wi-Fi 6)"));
-	qualOpts.Add(_("70% — High Speed (Crowded Wi-Fi)"));
+	qualOpts.Add(_("85% - Crisp && Low Latency (Recommended)"));
+	qualOpts.Add(_("95% - Maximum Visual Fidelity (5GHz / Wi-Fi 6)"));
+	qualOpts.Add(_("70% - High Speed (Crowded Wi-Fi)"));
 	m_qualityChoice = new wxChoice(cfgBox->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, qualOpts);
 	m_qualityChoice->SetSelection(0);
 	m_qualityChoice->Bind(wxEVT_CHOICE, &QuestVRWindow::OnSettingsChanged, this);
@@ -912,11 +1343,11 @@ QuestVRWindow::QuestVRWindow(wxWindow* parent)
 	rootSizer->Add(cfgBox, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
 	// 3. Broadcast Server & Quest Browser Link
-	auto* streamBox = new wxStaticBoxSizer(wxVERTICAL, this, _("Step 3: Open URL in Meta Quest Browser & Enter VR / Mixed Reality"));
+	auto* streamBox = new wxStaticBoxSizer(wxVERTICAL, this, _("Step 3: Open URL in Meta Quest Browser && Enter VR / Mixed Reality"));
 	auto* urlRow = new wxBoxSizer(wxHORIZONTAL);
 	urlRow->Add(new wxStaticText(streamBox->GetStaticBox(), wxID_ANY, _("Quest Browser URL:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
 	m_urlText = new wxTextCtrl(streamBox->GetStaticBox(), wxID_ANY, wxString::FromUTF8(svc.GetBroadcastUrl()),
-							   wxDefaultPosition, wxDefaultSize, wxTE_READONLY);
+							   wxDefaultPosition, wxSize(340, -1), wxTE_READONLY);
 	wxFont urlFont = m_urlText->GetFont();
 	urlFont.SetPointSize(urlFont.GetPointSize() + 2);
 	urlFont.SetWeight(wxFONTWEIGHT_BOLD);
@@ -932,6 +1363,21 @@ QuestVRWindow::QuestVRWindow(wxWindow* parent)
 	urlRow->Add(previewBtn, 0, wxALIGN_CENTER_VERTICAL);
 
 	streamBox->Add(urlRow, 0, wxALL | wxEXPAND, 6);
+
+	// WebXR 1-Click ADB Fix & Settings Guide Buttons
+	auto* fixRow = new wxBoxSizer(wxHORIZONTAL);
+	m_adbFixBtn = new wxButton(streamBox->GetStaticBox(), wxID_ANY, _("1-Click Fix WebXR via ADB (Forward localhost to Quest)"));
+	wxFont fixFont = m_adbFixBtn->GetFont();
+	fixFont.SetWeight(wxFONTWEIGHT_BOLD);
+	m_adbFixBtn->SetFont(fixFont);
+	m_adbFixBtn->Bind(wxEVT_BUTTON, &QuestVRWindow::OnAdbFixWebXR, this);
+	fixRow->Add(m_adbFixBtn, 0, wxRIGHT, 6);
+
+	m_flagsGuideBtn = new wxButton(streamBox->GetStaticBox(), wxID_ANY, _("Quest Browser Settings Guide..."));
+	m_flagsGuideBtn->Bind(wxEVT_BUTTON, &QuestVRWindow::OnOpenQuestFlagsGuide, this);
+	fixRow->Add(m_flagsGuideBtn, 0);
+
+	streamBox->Add(fixRow, 0, wxLEFT | wxRIGHT | wxBOTTOM, 6);
 
 	m_statusText = new wxStaticText(streamBox->GetStaticBox(), wxID_ANY, wxEmptyString);
 	streamBox->Add(m_statusText, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 6);
@@ -958,7 +1404,7 @@ QuestVRWindow::QuestVRWindow(wxWindow* parent)
 	SetSizer(rootSizer);
 	Layout();
 	Fit();
-	SetMinSize(wxSize(640, 520));
+	SetMinSize(wxSize(720, 580));
 	CentreOnParent();
 
 	CemuApp::ApplyThemeToWindow(this);
@@ -1045,6 +1491,122 @@ void QuestVRWindow::OnPreviewBrowser(wxCommandEvent&)
 	wxLaunchDefaultBrowser(m_urlText->GetValue());
 }
 
+void QuestVRWindow::OnAdbFixWebXR(wxCommandEvent&)
+{
+	std::string adbPath = FindAdbExecutable();
+	if (adbPath.empty())
+	{
+		wxMessageBox(
+			_("ADB (Android Debug Bridge) was not found on your system.\n\n"
+			  "To use 1-Click WebXR forwarding:\n"
+			  "1. Install Meta Quest Developer Hub, SideQuest, or Android platform-tools.\n\n"
+			  "Or click the 'Quest Browser Settings Guide...' button to enable WebXR over Wi-Fi!"),
+			_("ADB Not Found"), wxOK | wxICON_INFORMATION, this);
+		return;
+	}
+
+	auto& svc = QuestBroadcastService::Instance();
+	if (!svc.running.load())
+	{
+		wxCommandEvent dummy;
+		OnSettingsChanged(dummy);
+		svc.Start();
+	}
+
+	const uint16_t currentPort = svc.port.load();
+	std::string reverseArg = fmt::format("reverse tcp:{} tcp:{}", currentPort, currentPort);
+	std::string revOut;
+	bool ok = RunAdbCommand(reverseArg, &revOut);
+
+	if (ok)
+	{
+		svc.adbForwardActive.store(true);
+		m_urlText->SetValue(fmt::format("http://localhost:{}", currentPort));
+
+		// Launch browser directly on Quest headset
+		std::string launchArg = fmt::format("shell am start -a android.intent.action.VIEW -d \"http://localhost:{}\"", currentPort);
+		RunAdbCommand(launchArg, nullptr);
+
+		wxMessageBox(
+			wxString::Format(
+				_("WebXR 1-Click Fix Successful!\n\n"
+				  "ADB reverse port forwarding is established on tcp:%u -> localhost:%u.\n"
+				  "Meta Quest Browser was launched on your headset to: http://localhost:%u\n\n"
+				  "Because 'localhost' is a trusted Secure Context, WebXR Mixed Reality and VR Cinema are now fully unlocked with zero security warnings!"),
+				currentPort, currentPort, currentPort),
+			_("WebXR Unlocked on Quest!"), wxOK | wxICON_INFORMATION, this);
+	}
+	else
+	{
+		wxString errMsg = wxString::FromUTF8(revOut);
+		if (errMsg.empty())
+			errMsg = _("No Quest headset detected or ADB connection failed.");
+
+		wxMessageBox(
+			wxString::Format(
+				_("Could not connect to Quest headset via ADB:\n%s\n\n"
+				  "How to connect:\n"
+				  "1. Connect your Meta Quest to this PC using a USB cable (or enable Wireless ADB in Quest Developer settings).\n"
+				  "2. Put on the headset and click 'Allow USB Debugging' if prompted.\n"
+				  "3. Click '1-Click Fix WebXR via ADB' again.\n\n"
+				  "Tip: You can also use the 'Quest Browser Settings Guide...' button to enable WebXR over Wi-Fi without any cables!"),
+				errMsg),
+			_("Quest ADB Connection"), wxOK | wxICON_WARNING, this);
+	}
+
+	RefreshUI();
+}
+
+void QuestVRWindow::OnOpenQuestFlagsGuide(wxCommandEvent&)
+{
+	auto& svc = QuestBroadcastService::Instance();
+	std::string streamUrl = svc.GetBroadcastUrl();
+	std::string flagUrl = "chrome://flags/#unsafely-treat-insecure-origin-as-secure";
+
+	wxDialog dlg(this, wxID_ANY, _("Quest Browser WebXR Settings Guide"), wxDefaultPosition, wxSize(560, 420));
+	auto* sizer = new wxBoxSizer(wxVERTICAL);
+
+	auto* desc = new wxStaticText(&dlg, wxID_ANY,
+		_("How to unlock WebXR over Wi-Fi without ADB:\n\n"
+		  "1. Inside your Meta Quest headset, open Meta Quest Browser.\n"
+		  "2. In the browser URL bar, enter:\n"
+		  "   chrome://flags/#unsafely-treat-insecure-origin-as-secure\n\n"
+		  "3. Change the dropdown setting from 'Default' to 'Enabled'.\n\n"
+		  "4. In the text box directly underneath, enter your CemuX stream URL:\n"
+		  "   " + wxString::FromUTF8(streamUrl) + "\n\n"
+		  "5. Click the blue 'Relaunch' button at the bottom of Quest Browser.\n\n"
+		  "Done! Mixed Reality Passthrough and Full-Screen VR Cinema will now start instantly over Wi-Fi!"));
+	desc->Wrap(520);
+	sizer->Add(desc, 1, wxALL | wxEXPAND, 12);
+
+	auto* btnRow = new wxBoxSizer(wxHORIZONTAL);
+	auto* copyFlagBtn = new wxButton(&dlg, wxID_ANY, _("Copy Flags URL"));
+	copyFlagBtn->Bind(wxEVT_BUTTON, [flagUrl](wxCommandEvent&) {
+		if (wxTheClipboard->Open()) {
+			wxTheClipboard->SetData(new wxTextDataObject(wxString::FromUTF8(flagUrl)));
+			wxTheClipboard->Close();
+		}
+	});
+	btnRow->Add(copyFlagBtn, 0, wxRIGHT, 6);
+
+	auto* copyUrlBtn = new wxButton(&dlg, wxID_ANY, _("Copy Stream URL"));
+	copyUrlBtn->Bind(wxEVT_BUTTON, [streamUrl](wxCommandEvent&) {
+		if (wxTheClipboard->Open()) {
+			wxTheClipboard->SetData(new wxTextDataObject(wxString::FromUTF8(streamUrl)));
+			wxTheClipboard->Close();
+		}
+	});
+	btnRow->Add(copyUrlBtn, 0, wxRIGHT, 6);
+
+	auto* okBtn = new wxButton(&dlg, wxID_OK, _("Close"));
+	btnRow->Add(okBtn, 0);
+
+	sizer->Add(btnRow, 0, wxALL | wxALIGN_RIGHT, 12);
+	dlg.SetSizer(sizer);
+	CemuApp::ApplyThemeToWindow(&dlg);
+	dlg.ShowModal();
+}
+
 void QuestVRWindow::OnOpenInputSettings(wxCommandEvent&)
 {
 	auto dialog = std::make_unique<InputSettings2>(this);
@@ -1068,21 +1630,26 @@ void QuestVRWindow::RefreshUI()
 	const bool hasVpad1 = (inputMgr.get_vpad_controller(1) != nullptr);
 	const bool hasWpad0 = (inputMgr.get_wpad_controller(0) != nullptr);
 	const bool hasWpad1 = (inputMgr.get_wpad_controller(1) != nullptr);
-	const bool hasP1 = hasVpad0 || hasWpad0;
-	const bool hasP2 = hasVpad1 || hasWpad1 || (hasVpad0 && hasWpad0);
+	const bool hasRecentQuest0 = HasRecentQuestInput(0);
+	const bool hasRecentQuest1 = HasRecentQuestInput(1);
+
+	const bool hasP1 = hasVpad0 || hasWpad0 || hasRecentQuest0;
+	const bool hasP2 = hasVpad1 || hasWpad1 || (hasVpad0 && hasWpad0) || hasRecentQuest1;
+
+	wxString p1Desc = hasRecentQuest0 ? _("Quest VR Connected") : (hasP1 ? _("Connected && Ready") : _("Not Configured"));
+	wxString p2Desc = hasRecentQuest1 ? _("Quest VR Connected") : (hasP2 ? _("Connected && Ready") : _("Not Configured"));
 
 	wxString ctrlMsg = wxString::Format(
 		_("Player 1 Controller: %s   |   Player 2 Controller: %s\n"
 		  "Tip: Sync your wireless controller to the PC (or Quest via Bluetooth) before launching into VR/MR."),
-		hasP1 ? _("Connected && Ready") : _("Not Configured"),
-		hasP2 ? _("Connected && Ready") : _("Not Configured"));
+		p1Desc, p2Desc);
 	m_controllerStatusText->SetLabel(ctrlMsg);
 
 	if (svc.running.load())
 	{
 		m_startStopBtn->SetLabel(_("Stop Quest Broadcast"));
 		m_statusText->SetLabel(wxString::Format(
-			_("BROADCAST LIVE on %s  —  Resolution: %dx%d  |  Frames Captured: %llu  |  Frames Streamed to Quest: %llu"),
+			_("BROADCAST LIVE on %s  -  Resolution: %dx%d  |  Frames Captured: %llu  |  Frames Streamed to Quest: %llu"),
 			wxString::FromUTF8(svc.GetBroadcastUrl()),
 			svc.lastCaptureW.load(),
 			svc.lastCaptureH.load(),

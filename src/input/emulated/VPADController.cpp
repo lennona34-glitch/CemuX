@@ -2,6 +2,7 @@
 #include "input/api/Controller.h"
 #include "input/api/SDL/SDLController.h"
 #include "gui/guiWrapper.h"
+#include "gui/QuestVRWindow.h"
 #include "input/InputManager.h"
 #include "Cafe/HW/Latte/Core/Latte.h"
 #include "Cafe/CafeSystem.h"
@@ -108,6 +109,43 @@ void VPADController::VPADRead(VPADStatus_t& status, const BtnRepeat& repeat)
 		status.hold |= VPAD_STICK_R_DOWN;
 	else if (rotation.y >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_UP) && rotation.y >= kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_R_UP;
+
+	// Merge Quest VR / Bluetooth Gamepad inputs (Channel 0 / Player 1)
+	uint32 qButtons = 0;
+	float qLX = 0.0f, qLY = 0.0f, qRX = 0.0f, qRY = 0.0f;
+	if (QuestVRWindow::GetQuestInput(0, qButtons, qLX, qLY, qRX, qRY))
+	{
+		status.hold |= qButtons;
+		if (std::abs(qLX) > 0.05f || std::abs(qLY) > 0.05f)
+		{
+			status.leftStick.x = qLX;
+			status.leftStick.y = qLY;
+			if (qLX <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_LEFT) && qLX <= -kHoldAxisThreshold))
+				status.hold |= VPAD_STICK_L_LEFT;
+			else if (qLX >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_RIGHT) && qLX >= kHoldAxisThreshold))
+				status.hold |= VPAD_STICK_L_RIGHT;
+
+			if (qLY <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_DOWN) && qLY <= -kHoldAxisThreshold))
+				status.hold |= VPAD_STICK_L_DOWN;
+			else if (qLY >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_UP) && qLY >= kHoldAxisThreshold))
+				status.hold |= VPAD_STICK_L_UP;
+		}
+
+		if (std::abs(qRX) > 0.05f || std::abs(qRY) > 0.05f)
+		{
+			status.rightStick.x = qRX;
+			status.rightStick.y = qRY;
+			if (qRX <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_LEFT) && qRX <= -kHoldAxisThreshold))
+				status.hold |= VPAD_STICK_R_LEFT;
+			else if (qRX >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_RIGHT) && qRX >= kHoldAxisThreshold))
+				status.hold |= VPAD_STICK_R_RIGHT;
+
+			if (qRY <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_DOWN) && qRY <= -kHoldAxisThreshold))
+				status.hold |= VPAD_STICK_R_DOWN;
+			else if (qRY >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_UP) && qRY >= kHoldAxisThreshold))
+				status.hold |= VPAD_STICK_R_UP;
+		}
+	}
 
 	// button repeat
 	const auto now = std::chrono::high_resolution_clock::now();

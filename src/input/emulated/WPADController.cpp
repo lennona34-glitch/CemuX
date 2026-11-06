@@ -1,5 +1,6 @@
 #include <api/Controller.h>
 #include "input/emulated/WPADController.h"
+#include "gui/QuestVRWindow.h"
 
 #include "input/emulated/ClassicController.h"
 #include "input/emulated/ProController.h"
@@ -173,6 +174,54 @@ void WPADController::WPADRead(WPADStatus_t* status)
 	}
 	default:
 		cemu_assert(false);
+	}
+
+	// Merge Quest VR inputs for this player
+	uint32 qButtons = 0;
+	float qLX = 0.0f, qLY = 0.0f, qRX = 0.0f, qRY = 0.0f;
+	if (QuestVRWindow::GetQuestInput(static_cast<int>(m_player_index), qButtons, qLX, qLY, qRX, qRY))
+	{
+		const uint32 wpadBtns = QuestVRWindow::ConvertVpadToWpadButtons(qButtons);
+		switch (m_data_format)
+		{
+		case kDataFormat_URCC:
+		{
+			WPADUCStatus_t* ex_status = (WPADUCStatus_t*)status;
+			ex_status->ucButton |= wpadBtns;
+			if (std::abs(qLX) > 0.05f || std::abs(qLY) > 0.05f)
+			{
+				ex_status->ucLStickX = static_cast<uint16>(qLX * 2048.0f);
+				ex_status->ucLStickY = static_cast<uint16>(qLY * 2048.0f);
+			}
+			if (std::abs(qRX) > 0.05f || std::abs(qRY) > 0.05f)
+			{
+				ex_status->ucRStickX = static_cast<uint16>(qRX * 2048.0f);
+				ex_status->ucRStickY = static_cast<uint16>(qRY * 2048.0f);
+			}
+			break;
+		}
+		case kDataFormat_CLASSIC:
+		case kDataFormat_CLASSIC_ACC:
+		case kDataFormat_CLASSIC_ACC_DPD:
+		{
+			WPADCLStatus_t* ex_status = (WPADCLStatus_t*)status;
+			ex_status->clButton |= wpadBtns;
+			if (std::abs(qLX) > 0.05f || std::abs(qLY) > 0.05f)
+			{
+				ex_status->clLStickX = static_cast<uint16>(qLX * 2048.0f);
+				ex_status->clLStickY = static_cast<uint16>(qLY * 2048.0f);
+			}
+			if (std::abs(qRX) > 0.05f || std::abs(qRY) > 0.05f)
+			{
+				ex_status->clRStickX = static_cast<uint16>(qRX * 2048.0f);
+				ex_status->clRStickY = static_cast<uint16>(qRY * 2048.0f);
+			}
+			break;
+		}
+		default:
+			status->button |= wpadBtns;
+			break;
+		}
 	}
 
 	status->dev = get_device_type();
@@ -380,5 +429,48 @@ void WPADController::KPADRead(KPADStatus_t& status, const BtnRepeat& repeat)
 		cemu_assert(false);
 	}
 
-	
+	// Merge Quest VR inputs for this player
+	uint32 qButtons = 0;
+	float qLX = 0.0f, qLY = 0.0f, qRX = 0.0f, qRY = 0.0f;
+	if (QuestVRWindow::GetQuestInput(static_cast<int>(m_player_index), qButtons, qLX, qLY, qRX, qRY))
+	{
+		const uint32 wpadBtns = QuestVRWindow::ConvertVpadToWpadButtons(qButtons);
+		*hold |= wpadBtns;
+		switch (type())
+		{
+		case Pro:
+			if (std::abs(qLX) > 0.05f || std::abs(qLY) > 0.05f)
+			{
+				status.ex_status.uc.lstick.x = qLX;
+				status.ex_status.uc.lstick.y = qLY;
+			}
+			if (std::abs(qRX) > 0.05f || std::abs(qRY) > 0.05f)
+			{
+				status.ex_status.uc.rstick.x = qRX;
+				status.ex_status.uc.rstick.y = qRY;
+			}
+			break;
+		case Classic:
+			if (std::abs(qLX) > 0.05f || std::abs(qLY) > 0.05f)
+			{
+				status.ex_status.cl.lstick.x = qLX;
+				status.ex_status.cl.lstick.y = qLY;
+			}
+			if (std::abs(qRX) > 0.05f || std::abs(qRY) > 0.05f)
+			{
+				status.ex_status.cl.rstick.x = qRX;
+				status.ex_status.cl.rstick.y = qRY;
+			}
+			break;
+		case Wiimote:
+			if (std::abs(qLX) > 0.05f || std::abs(qLY) > 0.05f)
+			{
+				status.ex_status.fs.stick.x = qLX;
+				status.ex_status.fs.stick.y = qLY;
+			}
+			break;
+		default:
+			break;
+		}
+	}
 }
